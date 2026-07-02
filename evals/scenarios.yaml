@@ -1,0 +1,79 @@
+- id: emergency_flooding
+  turns:
+    - "My basement is flooding!"
+    - "Mike, 555-1234, 42 Oak Street"
+  expect:
+    urgency: emergency
+    escalate: true
+    notify_called: true
+
+- id: faq_hours
+  turns:
+    - "What are your hours?"
+  expect:
+    intent: faq
+    should_end_call: false
+    notify_called: false
+
+- id: emergency_gas_leak
+  turns:
+    - "I smell a gas leak at my house"
+    - "Sarah, 555-9876, 10 Maple Ave"
+  expect:
+    urgency: emergency
+    escalate: true
+    notify_called: true
+
+- id: booking_request
+  turns:
+    - "I'd like to schedule AC maintenance"
+    - "John, 555-4444, 88 Pine Road"
+  expect:
+    notify_called: false
+
+- id: vague_initial
+  turns:
+    - "Hi, I need help"
+    - "My furnace stopped working"
+    - "Tom, 555-3333, 5 Cedar Lane"
+  expect:
+    notify_called: false
+
+- id: no_heat_emergency
+  turns:
+    - "We have no heat and it's freezing"
+    - "Lisa, 555-2222, 99 Birch Blvd"
+  expect:
+    urgency: emergency
+    escalate: true
+    notify_called: true
+
+- id: faq_service_area
+  turns:
+    - "Do you serve Springfield?"
+  expect:
+    intent: faq
+    notify_called: false
+
+- id: wrong_number_style
+  turns:
+    - "Is this the pizza place?"
+  expect:
+    notify_called: false
+
+- id: partial_info_emergency
+  turns:
+    - "Water everywhere in the basement!"
+    - "555-1111"
+  expect:
+    urgency: emergency
+    escalate: true
+    notify_called: false
+
+- id: complete_non_emergency
+  turns:
+    - "I'd like a quote for a new AC unit"
+    - "Pat, 555-6666, 12 Elm Street"
+  expect:
+    urgency: unknown
+    notify_called: false
