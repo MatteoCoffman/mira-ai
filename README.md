@@ -41,12 +41,12 @@ flowchart TD
 | Orchestration | LangGraph |
 | Observability | LangSmith |
 | Data | DynamoDB (CDK-provisioned) |
-| Infra | AWS CDK (TypeScript) |
-| Interface | CLI + FastAPI + Twilio Voice |
+| Infra | AWS CDK (TypeScript) — Lambda Function URL + API Gateway WebSocket |
+| Interface | CLI + FastAPI + Twilio Voice (ConversationRelay) |
 
-## Phone demo (Twilio Voice)
+## Phone demo (Twilio Voice + ConversationRelay)
 
-Call a real phone number and talk to Mira. One Twilio number serves three demo businesses via IVR:
+Call a real phone number and talk to Mira with streaming speech (Deepgram STT + ElevenLabs TTS via Twilio ConversationRelay). One Twilio number serves three demo businesses via IVR:
 
 | Keypad | Business |
 |--------|----------|
@@ -54,51 +54,43 @@ Call a real phone number and talk to Mira. One Twilio number serves three demo b
 | 2 | Pest Pros |
 | 3 | Mike's Plumbing |
 
+**Call flow:** IVR digit Gather → `<Connect><ConversationRelay>` WebSocket → LangGraph turns as text tokens → hang-up runs post-call.
+
 ### Setup
 
 1. **Twilio account** — [twilio.com](https://www.twilio.com): buy a voice-capable phone number.
-2. **Env vars** in `.env`:
+2. **Enable ConversationRelay** — complete Twilio's ConversationRelay onboarding / AI-ML addendum in Console (required; Connect fails without it).
+3. **Env vars** in `.env`:
 
 ```bash
 TWILIO_ACCOUNT_SID=...
 TWILIO_AUTH_TOKEN=...
 TWILIO_PHONE_NUMBER=+1...
-MIRA_PUBLIC_URL=https://your-ngrok-url.ngrok-free.app
+# Optional locally; CDK injects CONVERSATION_RELAY_WSS_URL on deploy
 ```
 
-3. **Expose the API** — either deploy with CDK (recommended) or run locally with ngrok:
-
-**Option A — CDK deploy (production demo):**
+4. **Deploy with CDK** (recommended for phone demos — ConversationRelay needs a public `wss://` URL):
 
 ```bash
 # .env must include OPENAI_API_KEY, Twilio vars, etc.
 cd infra
 npm install
-npx cdk deploy
-# copy ApiFunctionUrl from stack outputs → Twilio webhooks (step 4)
+npm run deploy
+# copy ApiFunctionUrl from stack outputs → Twilio webhooks (step 5)
+# ConversationRelayWssUrl is injected into the HTTP Lambda automatically
 ```
 
-**Option B — local + ngrok:**
+Local uvicorn + ngrok HTTP alone is **not enough** for ConversationRelay (WebSocket must be public). Prefer the deployed stack for live calls.
 
-```bash
-source .venv/bin/activate
-pip install -e ".[dev,api]"
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+5. **Twilio Console** → Phone Numbers → your number → Voice configuration:
+   - **A call comes in:** Webhook `POST` → `{ApiFunctionUrl}twilio/voice/incoming`
+   - **Call status changes:** Webhook `POST` → `{ApiFunctionUrl}twilio/voice/status` (runs post-call on hang-up)
 
-# another terminal
-ngrok http 8000
-# copy the https URL into MIRA_PUBLIC_URL
-```
-
-4. **Twilio Console** → Phone Numbers → your number → Voice configuration:
-   - **A call comes in:** Webhook `POST` → `{MIRA_PUBLIC_URL}/twilio/voice/incoming`
-   - **Call status changes:** Webhook `POST` → `{MIRA_PUBLIC_URL}/twilio/voice/status` (runs post-call on hang-up)
-
-5. **Seed tenants** (if not already): `python scripts/seed.py`
-
-6. **Restart uvicorn** after changing `MIRA_PUBLIC_URL`, then call your Twilio number → press 1/2/3 → speak to Mira.
+6. Call your Twilio number → press 1/2/3 → speak naturally (you can interrupt Mira mid-sentence).
 
 On hang-up, the post-call agent saves the record and sends an owner SMS (real Twilio SMS when credentials are set; mock print otherwise).
+
+**Note:** ConversationRelay + ElevenLabs + Deepgram costs more per minute than Polly — fine for demos; watch usage if the number is public.
 
 ## Quick start (CLI)
 
@@ -117,7 +109,7 @@ npm run deploy       # builds lambda_bundle + deploys stack
 cd ..
 ```
 
-This creates six DynamoDB tables plus a Python Lambda with a public Function URL for Twilio webhooks. Stack output `ApiFunctionUrl` is your webhook base URL. Credentials from `.env` are written to Secrets Manager (`ApiSecretArn`) at deploy time — not stored as plain Lambda environment variables.
+This creates DynamoDB tables (including `mira-ws-connections`), an HTTP Lambda Function URL for Twilio webhooks, and an API Gateway WebSocket for ConversationRelay. Stack outputs: `ApiFunctionUrl`, `ConversationRelayWssUrl`, `ApiSecretArn`. Credentials from `.env` are written to Secrets Manager at deploy time.
 
 ### 2. Run the app
 
@@ -181,7 +173,7 @@ mira-ai/
 │   ├── __init__.py       # Backend router (dynamodb | sqlite)
 │   ├── dynamodb.py
 │   └── sqlite.py         # Test / offline fallback
-├── infra/                # AWS CDK — DynamoDB + Lambda API
+├── infra/                # AWS CDK — DynamoDB + HTTP Lambda + ConversationRelay WebSocket
 │   ├── bin/app.ts
 │   └── lib/mira-stack.ts
 ├── Dockerfile.lambda     # Optional container image (if you prefer Docker deploy)
@@ -192,7 +184,11 @@ mira-ai/
 │   ├── demo_cli.py
 │   ├── run_evals.py
 │   └── run_post_call_evals.py
-└── api/main.py
+└── api/
+    ├── main.py
+    ├── twilio_voice.py       # IVR + Connect ConversationRelay
+    ├── conversation_relay.py # Prompt → text token helpers
+    └── ws_handler.py         # API Gateway WebSocket Lambda
 ```
 
 ## Interview talking points
@@ -201,13 +197,14 @@ mira-ai/
 2. **Why LangGraph:** Tool loops, conditional emergency routing, separate graphs per agent role.
 3. **Why tools:** Lead save and owner SMS are real function calls — not hallucinated actions.
 4. **Supervisor pattern:** Mid-call emergency notify is code-enforced, not left to the LLM alone.
-5. **Infrastructure as code:** DynamoDB + Lambda Function URL via CDK; credentials in Secrets Manager; Twilio webhooks validated via `X-Twilio-Signature`.
+5. **Infrastructure as code:** DynamoDB + Lambda Function URL + ConversationRelay WebSocket via CDK; credentials in Secrets Manager; Twilio webhooks validated via `X-Twilio-Signature`.
 6. **Evals:** Separate YAML suites for live-call behavior and post-call summarization.
 
 ## Security
 
-- **Twilio webhooks:** Every `/twilio/voice/*` route validates `X-Twilio-Signature` using your auth token (disable locally with `MIRA_VALIDATE_TWILIO_SIGNATURE=false`).
+- **Twilio webhooks:** Every `/twilio/voice/*` HTTP route validates `X-Twilio-Signature` using your auth token (disable locally with `MIRA_VALIDATE_TWILIO_SIGNATURE=false`).
 - **Secrets:** CDK stores OpenAI/Twilio/LangSmith keys in AWS Secrets Manager (`mira/api`). Lambda loads them at cold start via `MIRA_SECRETS_ARN` — not plain env vars in the console.
+- **Voice:** After IVR, calls use Twilio ConversationRelay (ElevenLabs TTS + Deepgram STT) over a private WebSocket to your API Gateway stage.
 
 ## Roadmap (next iterations)
 

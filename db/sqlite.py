@@ -97,6 +97,13 @@ def init_db() -> None:
                 started_at TEXT,
                 ended_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS ws_connections (
+                connection_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             """
         )
 
@@ -375,3 +382,41 @@ def list_call_records(tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
             record["lead"] = json.loads(record.pop("lead_json"))
             records.append(record)
     return records
+
+
+def put_ws_connection(
+    connection_id: str,
+    *,
+    session_id: str,
+    tenant_id: str,
+    ttl_seconds: int = 86400,
+) -> None:
+    del ttl_seconds  # SQLite tests don't need TTL
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO ws_connections (connection_id, session_id, tenant_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(connection_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                tenant_id = excluded.tenant_id
+            """,
+            (connection_id, session_id, tenant_id),
+        )
+
+
+def get_ws_connection(connection_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM ws_connections WHERE connection_id = ?",
+            (connection_id,),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def delete_ws_connection(connection_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM ws_connections WHERE connection_id = ?",
+            (connection_id,),
+        )

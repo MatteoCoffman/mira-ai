@@ -1,4 +1,4 @@
-"""Twilio Voice webhooks — live phone call demo."""
+"""Twilio Voice webhooks — IVR + ConversationRelay phone demo."""
 
 from __future__ import annotations
 
@@ -59,6 +59,16 @@ def public_url(path: str) -> str:
     return urljoin(f"{base}/", path.lstrip("/"))
 
 
+def conversation_relay_wss_url() -> str:
+    url = os.environ.get("CONVERSATION_RELAY_WSS_URL", "").strip()
+    if not url:
+        raise RuntimeError(
+            "CONVERSATION_RELAY_WSS_URL is not set. Deploy the CDK WebSocket API "
+            "or set the wss:// URL for ConversationRelay."
+        )
+    return url
+
+
 def twiml(response: VoiceResponse) -> Response:
     """Return TwiML with the content type Twilio expects."""
     return Response(content=str(response), media_type="application/xml")
@@ -105,6 +115,7 @@ def _run_post_call_if_needed(call_sid: str) -> None:
 
 
 def _gather_speech(response: VoiceResponse, action_path: str, prompt: str | None = None) -> None:
+    """Legacy Gather speech helper — kept for /turn fallback tests."""
     gather = Gather(
         input="speech",
         action=public_url(action_path),
@@ -118,6 +129,27 @@ def _gather_speech(response: VoiceResponse, action_path: str, prompt: str | None
     response.append(gather)
     response.say("I didn't catch that. Goodbye.", voice="Polly.Joanna")
     response.hangup()
+
+
+def _connect_conversation_relay(
+    response: VoiceResponse,
+    *,
+    tenant_id: str,
+    session_id: str,
+    welcome_greeting: str,
+) -> None:
+    connect = response.connect(action=public_url("/twilio/voice/relay-action"))
+    relay = connect.conversation_relay(
+        url=conversation_relay_wss_url(),
+        welcome_greeting=welcome_greeting,
+        tts_provider="ElevenLabs",
+        transcription_provider="Deepgram",
+        interruptible="any",
+        dtmf_detection="true",
+        language="en-US",
+    )
+    relay.parameter(name="tenant_id", value=tenant_id)
+    relay.parameter(name="session_id", value=session_id)
 
 
 @router.post("/incoming")
@@ -148,7 +180,7 @@ async def ivr_menu(
     request: Request,
     form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
 ) -> Response:
-    """Map keypad digit to tenant and start the conversation."""
+    """Map keypad digit to tenant and connect ConversationRelay."""
     bind_public_base_url(request)
     call_sid = form["CallSid"]
     digits = form.get("Digits", "")
@@ -172,8 +204,12 @@ async def ivr_menu(
         [],
     )
 
-    response.say(tenant["greeting"], voice="Polly.Joanna")
-    _gather_speech(response, "/twilio/voice/turn")
+    _connect_conversation_relay(
+        response,
+        tenant_id=tenant_id,
+        session_id=call_sid,
+        welcome_greeting=tenant["greeting"],
+    )
     return twiml(response)
 
 
@@ -182,7 +218,7 @@ async def speech_turn(
     request: Request,
     form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
 ) -> Response:
-    """Process caller speech through the receptionist agent."""
+    """Legacy Gather speech path — kept for local/fallback testing."""
     bind_public_base_url(request)
     call_sid = form["CallSid"]
     speech_result = form.get("SpeechResult", "")
@@ -226,6 +262,19 @@ async def speech_turn(
 
     response.say(reply, voice="Polly.Joanna")
     _gather_speech(response, "/twilio/voice/turn")
+    return twiml(response)
+
+
+@router.post("/relay-action")
+async def relay_action(
+    form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
+) -> Response:
+    """Connect action callback when ConversationRelay session ends."""
+    call_sid = form.get("CallSid") or form.get("callSid") or ""
+    if call_sid:
+        _run_post_call_if_needed(call_sid)
+    response = _voice_response()
+    response.hangup()
     return twiml(response)
 
 

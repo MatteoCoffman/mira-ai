@@ -18,6 +18,7 @@ _TABLE_SUFFIXES = (
     "notifications",
     "tool-calls",
     "call-records",
+    "ws-connections",
 )
 
 
@@ -278,3 +279,35 @@ def list_call_records(tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
         record["lead"] = json.loads(record.pop("lead_json", "{}"))
         records.append(record)
     return records
+
+
+def put_ws_connection(
+    connection_id: str,
+    *,
+    session_id: str,
+    tenant_id: str,
+    ttl_seconds: int = 86400,
+) -> None:
+    import time
+
+    table = _resource().Table(table_name("ws-connections"))
+    table.put_item(
+        Item={
+            "connection_id": connection_id,
+            "session_id": session_id,
+            "tenant_id": tenant_id,
+            "created_at": _utc_now(),
+            "ttl": int(time.time()) + ttl_seconds,
+        }
+    )
+
+
+def get_ws_connection(connection_id: str) -> dict[str, Any] | None:
+    table = _resource().Table(table_name("ws-connections"))
+    item = table.get_item(Key={"connection_id": connection_id}).get("Item")
+    return dict(item) if item else None
+
+
+def delete_ws_connection(connection_id: str) -> None:
+    table = _resource().Table(table_name("ws-connections"))
+    table.delete_item(Key={"connection_id": connection_id})

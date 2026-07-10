@@ -18,6 +18,7 @@ def voice_client(tmp_path, monkeypatch):
     monkeypatch.setenv("MIRA_DB_BACKEND", "sqlite")
     monkeypatch.setenv("MIRA_DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("MIRA_PUBLIC_URL", "https://test.example.com")
+    monkeypatch.setenv("CONVERSATION_RELAY_WSS_URL", "wss://test.example.com/prod")
     monkeypatch.setenv("MIRA_VALIDATE_TWILIO_SIGNATURE", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
@@ -46,16 +47,24 @@ def test_incoming_returns_ivr_twiml(voice_client):
     assert "statusCallback" not in body
 
 
-def test_menu_selects_hvac_and_starts_gather(voice_client):
+def test_menu_selects_hvac_and_connects_conversation_relay(voice_client):
     client, _ = voice_client
     response = client.post(
         "/twilio/voice/menu",
         data={"CallSid": "CA-test-menu", "Digits": "1"},
     )
     assert response.status_code == 200
-    assert "Dave's HVAC" in response.text
+    body = response.text
+    assert "Dave's HVAC" in body or "ConversationRelay" in body
     assert get_session_tenant_id("CA-test-menu") == "daves-hvac"
-    assert "/twilio/voice/turn" in response.text
+    assert "ConversationRelay" in body
+    assert "Connect" in body
+    assert "wss://test.example.com/prod" in body
+    assert "ElevenLabs" in body
+    assert "Deepgram" in body
+    assert "tenant_id" in body
+    assert "relay-action" in body
+    assert "/twilio/voice/turn" not in body
 
 
 def test_turn_invokes_agent_and_responds(voice_client):
@@ -82,6 +91,26 @@ def test_turn_invokes_agent_and_responds(voice_client):
     assert "Monday through Friday" in response.text
     mock_turn.assert_called_once()
     assert mock_graph is not None
+
+
+def test_relay_action_runs_post_call(voice_client):
+    client, _ = voice_client
+    save_session_state(
+        "CA-test-relay-action",
+        DAVE_HVAC["tenant_id"],
+        {"ivr_complete": True},
+        messages_to_serializable([HumanMessage(content="Need AC repair")]),
+    )
+
+    with patch("api.twilio_voice.run_post_call_pipeline") as mock_post:
+        mock_post.return_value = {"record_saved": True, "summary_sent": True}
+        response = client.post(
+            "/twilio/voice/relay-action",
+            data={"CallSid": "CA-test-relay-action"},
+        )
+        assert response.status_code == 200
+        assert "Hangup" in response.text
+        mock_post.assert_called_once()
 
 
 def test_status_runs_post_call_once(voice_client):
