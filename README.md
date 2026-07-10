@@ -66,7 +66,19 @@ TWILIO_PHONE_NUMBER=+1...
 MIRA_PUBLIC_URL=https://your-ngrok-url.ngrok-free.app
 ```
 
-3. **Expose the API locally** (until CDK deploy):
+3. **Expose the API** — either deploy with CDK (recommended) or run locally with ngrok:
+
+**Option A — CDK deploy (production demo):**
+
+```bash
+# .env must include OPENAI_API_KEY, Twilio vars, etc.
+cd infra
+npm install
+npx cdk deploy
+# copy ApiFunctionUrl from stack outputs → Twilio webhooks (step 4)
+```
+
+**Option B — local + ngrok:**
 
 ```bash
 source .venv/bin/activate
@@ -90,21 +102,22 @@ On hang-up, the post-call agent saves the record and sends an owner SMS (real Tw
 
 ## Quick start (CLI)
 
-### 1. Deploy DynamoDB tables (one-time)
+### 1. Deploy infrastructure (one-time)
 
-Requires AWS CLI credentials and Node.js.
+Requires AWS CLI credentials and Node.js. CDK reads secrets from the repo-root `.env` at deploy time. The deploy script builds a Linux Lambda bundle automatically (no Docker required).
 
 ```bash
 aws sts get-caller-identity
+cp .env.example .env   # fill in OPENAI_API_KEY, Twilio vars, etc.
 
 cd infra
 npm install
 npx cdk bootstrap    # once per account/region
-npx cdk deploy
+npm run deploy       # builds lambda_bundle + deploys stack
 cd ..
 ```
 
-This creates six tables: `mira-tenants`, `mira-sessions`, `mira-leads`, `mira-notifications`, `mira-tool-calls`, `mira-call-records`.
+This creates six DynamoDB tables plus a Python Lambda with a public Function URL for Twilio webhooks. Stack output `ApiFunctionUrl` is your `MIRA_PUBLIC_URL` — point Twilio voice webhooks at `{ApiFunctionUrl}twilio/voice/incoming` and `.../status`.
 
 ### 2. Run the app
 
@@ -168,9 +181,10 @@ mira-ai/
 │   ├── __init__.py       # Backend router (dynamodb | sqlite)
 │   ├── dynamodb.py
 │   └── sqlite.py         # Test / offline fallback
-├── infra/                # AWS CDK — DynamoDB tables
+├── infra/                # AWS CDK — DynamoDB + Lambda API
 │   ├── bin/app.ts
 │   └── lib/mira-stack.ts
+├── Dockerfile.lambda     # Optional container image (if you prefer Docker deploy)
 ├── evals/
 │   ├── scenarios.yaml
 │   └── post_call_scenarios.yaml
@@ -187,14 +201,14 @@ mira-ai/
 2. **Why LangGraph:** Tool loops, conditional emergency routing, separate graphs per agent role.
 3. **Why tools:** Lead save and owner SMS are real function calls — not hallucinated actions.
 4. **Supervisor pattern:** Mid-call emergency notify is code-enforced, not left to the LLM alone.
-5. **Infrastructure as code:** DynamoDB tables provisioned via CDK — same stack will host Lambda/API later.
+5. **Infrastructure as code:** DynamoDB + Docker Lambda + Function URL deployed via CDK; secrets from `.env` at deploy time.
 6. **Evals:** Separate YAML suites for live-call behavior and post-call summarization.
 
 ## Roadmap (next iterations)
 
 | Iteration | Focus |
 |-----------|--------|
-| 3 | CDK deploy — Lambda + API Gateway for public Twilio webhooks |
+| 3 | Twilio webhook signature validation + hardened production config |
 | 4 | Expanded evals + LangSmith eval integration |
 | 5 | Owner dashboard (recent calls + notifications) |
 

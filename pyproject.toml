@@ -23,6 +23,7 @@ api = [
     "uvicorn>=0.32.0",
     "twilio>=9.0.0",
     "python-multipart>=0.0.9",
+    "mangum>=0.19.0",
 ]
 
 [tool.pytest.ini_options]

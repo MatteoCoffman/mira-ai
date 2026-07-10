@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "build": "tsc",
+    "build:lambda": "bash ../scripts/build_lambda_bundle.sh",
     "cdk": "cdk",
-    "deploy": "cdk deploy",
+    "deploy": "npm run build:lambda && cdk deploy",
     "synth": "cdk synth"
   },
   "devDependencies": {
@@ -16,6 +17,7 @@
   },
   "dependencies": {
     "aws-cdk-lib": "^2.175.0",
-    "constructs": "^10.4.2"
+    "constructs": "^10.4.2",
+    "dotenv": "^16.4.7"
   }
 }

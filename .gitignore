@@ -14,3 +14,5 @@ htmlcov/
 infra/node_modules/
 infra/dist/
 cdk.out/
+lambda_bundle/
+lambda_bundle.zip

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from typing import Callable
 from urllib.parse import urljoin
 
-from fastapi import APIRouter, Form
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import Response
 from twilio.twiml.voice_response import Gather, VoiceResponse
 
@@ -29,6 +30,7 @@ router = APIRouter(prefix="/twilio/voice", tags=["twilio-voice"])
 
 GraphFactory = Callable[[], object]
 _get_graph: GraphFactory | None = None
+_request_base_url: ContextVar[str] = ContextVar("request_base_url", default="")
 
 
 def configure_voice_routes(get_graph: GraphFactory) -> None:
@@ -36,8 +38,19 @@ def configure_voice_routes(get_graph: GraphFactory) -> None:
     _get_graph = get_graph
 
 
+def bind_public_base_url(request: Request) -> None:
+    """Prefer MIRA_PUBLIC_URL; otherwise derive from the incoming request (Lambda URL)."""
+    env_base = os.environ.get("MIRA_PUBLIC_URL", "").strip().rstrip("/")
+    if env_base:
+        _request_base_url.set(env_base)
+        return
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("host", "")
+    _request_base_url.set(f"{proto}://{host}".rstrip("/") if host else "")
+
+
 def public_url(path: str) -> str:
-    base = os.environ.get("MIRA_PUBLIC_URL", "").strip().rstrip("/")
+    base = _request_base_url.get() or os.environ.get("MIRA_PUBLIC_URL", "").strip().rstrip("/")
     if not base:
         raise RuntimeError(
             "MIRA_PUBLIC_URL is not set. Use ngrok (or your deployed API URL) so Twilio can reach webhooks."
@@ -107,8 +120,9 @@ def _gather_speech(response: VoiceResponse, action_path: str, prompt: str | None
 
 
 @router.post("/incoming")
-async def incoming_call(CallSid: str = Form(...)) -> Response:
+async def incoming_call(request: Request, CallSid: str = Form(...)) -> Response:
     """New call — play IVR menu to pick demo business."""
+    bind_public_base_url(request)
     response = _voice_response()
     gather = Gather(
         num_digits=1,
@@ -126,10 +140,12 @@ async def incoming_call(CallSid: str = Form(...)) -> Response:
 
 @router.post("/menu")
 async def ivr_menu(
+    request: Request,
     CallSid: str = Form(...),
     Digits: str = Form(default=""),
 ) -> Response:
     """Map keypad digit to tenant and start the conversation."""
+    bind_public_base_url(request)
     response = _voice_response()
     tenant_id = IVR_TENANT_MAP.get(Digits.strip())
     if not tenant_id:
@@ -157,10 +173,12 @@ async def ivr_menu(
 
 @router.post("/turn")
 async def speech_turn(
+    request: Request,
     CallSid: str = Form(...),
     SpeechResult: str = Form(default=""),
 ) -> Response:
     """Process caller speech through the receptionist agent."""
+    bind_public_base_url(request)
     response = _voice_response()
     tenant_id = get_session_tenant_id(CallSid)
     if not tenant_id:

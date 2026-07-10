@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,8 +22,9 @@ from api.twilio_voice import configure_voice_routes, router as twilio_voice_rout
 from db import get_tenant, init_db, load_session_state, save_session_state
 from scripts.seed import main as seed_main
 
-app = FastAPI(title="Mira API", version="0.2.0")
+app = FastAPI(title="Mira API", version="0.3.0")
 _graph = None
+_initialized = False
 
 
 class TurnRequest(BaseModel):
@@ -39,19 +40,28 @@ class TurnResponse(BaseModel):
     should_end_call: bool = False
 
 
+def _ensure_initialized() -> None:
+    global _graph, _initialized
+    if _initialized:
+        return
+    init_db()
+    seed_main()
+    _graph = build_receptionist_graph()
+    configure_voice_routes(lambda: _graph)
+    _initialized = True
+
+
 def get_graph():
+    _ensure_initialized()
     if _graph is None:
         raise HTTPException(status_code=503, detail="Graph not initialized")
     return _graph
 
 
-@app.on_event("startup")
-def startup() -> None:
-    global _graph
-    init_db()
-    seed_main()
-    _graph = build_receptionist_graph()
-    configure_voice_routes(lambda: _graph)
+@app.middleware("http")
+async def initialize_on_request(request: Request, call_next):
+    _ensure_initialized()
+    return await call_next(request)
 
 
 app.include_router(twilio_voice_router)
