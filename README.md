@@ -117,7 +117,7 @@ npm run deploy       # builds lambda_bundle + deploys stack
 cd ..
 ```
 
-This creates six DynamoDB tables plus a Python Lambda with a public Function URL for Twilio webhooks. Stack output `ApiFunctionUrl` is your `MIRA_PUBLIC_URL` — point Twilio voice webhooks at `{ApiFunctionUrl}twilio/voice/incoming` and `.../status`.
+This creates six DynamoDB tables plus a Python Lambda with a public Function URL for Twilio webhooks. Stack output `ApiFunctionUrl` is your webhook base URL. Credentials from `.env` are written to Secrets Manager (`ApiSecretArn`) at deploy time — not stored as plain Lambda environment variables.
 
 ### 2. Run the app
 
@@ -201,16 +201,21 @@ mira-ai/
 2. **Why LangGraph:** Tool loops, conditional emergency routing, separate graphs per agent role.
 3. **Why tools:** Lead save and owner SMS are real function calls — not hallucinated actions.
 4. **Supervisor pattern:** Mid-call emergency notify is code-enforced, not left to the LLM alone.
-5. **Infrastructure as code:** DynamoDB + Docker Lambda + Function URL deployed via CDK; secrets from `.env` at deploy time.
+5. **Infrastructure as code:** DynamoDB + Lambda Function URL via CDK; credentials in Secrets Manager; Twilio webhooks validated via `X-Twilio-Signature`.
 6. **Evals:** Separate YAML suites for live-call behavior and post-call summarization.
+
+## Security
+
+- **Twilio webhooks:** Every `/twilio/voice/*` route validates `X-Twilio-Signature` using your auth token (disable locally with `MIRA_VALIDATE_TWILIO_SIGNATURE=false`).
+- **Secrets:** CDK stores OpenAI/Twilio/LangSmith keys in AWS Secrets Manager (`mira/api`). Lambda loads them at cold start via `MIRA_SECRETS_ARN` — not plain env vars in the console.
 
 ## Roadmap (next iterations)
 
 | Iteration | Focus |
 |-----------|--------|
-| 3 | Twilio webhook signature validation + hardened production config |
-| 4 | Expanded evals + LangSmith eval integration |
-| 5 | Owner dashboard (recent calls + notifications) |
+| 3 | Expanded evals + LangSmith eval integration |
+| 4 | Owner dashboard (recent calls + notifications) |
+| 5 | Cold start optimization + CI |
 
 ## License
 

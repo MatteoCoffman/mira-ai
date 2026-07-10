@@ -21,6 +21,7 @@ from agents.receptionist import (
 from api.twilio_voice import configure_voice_routes, router as twilio_voice_router
 from db import get_tenant, init_db, load_session_state, save_session_state
 from scripts.seed import main as seed_main
+from services.secrets import load_secrets
 
 app = FastAPI(title="Mira API", version="0.3.0")
 _graph = None
@@ -44,6 +45,7 @@ def _ensure_initialized() -> None:
     global _graph, _initialized
     if _initialized:
         return
+    load_secrets()
     init_db()
     seed_main()
     _graph = build_receptionist_graph()

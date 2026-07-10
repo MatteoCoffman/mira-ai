@@ -18,6 +18,7 @@ def voice_client(tmp_path, monkeypatch):
     monkeypatch.setenv("MIRA_DB_BACKEND", "sqlite")
     monkeypatch.setenv("MIRA_DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("MIRA_PUBLIC_URL", "https://test.example.com")
+    monkeypatch.setenv("MIRA_VALIDATE_TWILIO_SIGNATURE", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     mock_graph = MagicMock()
@@ -107,3 +108,26 @@ def test_status_runs_post_call_once(voice_client):
             data={"CallSid": "CA-test-status", "CallStatus": "completed"},
         )
         mock_post.assert_not_called()
+
+
+def test_rejects_unsigned_webhook_when_validation_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRA_DB_BACKEND", "sqlite")
+    monkeypatch.setenv("MIRA_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("MIRA_PUBLIC_URL", "https://test.example.com")
+    monkeypatch.setenv("MIRA_VALIDATE_TWILIO_SIGNATURE", "true")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-auth-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    mock_graph = MagicMock()
+    with patch("api.main.build_receptionist_graph", return_value=mock_graph):
+        from api.main import app
+
+        init_db()
+        seed_main()
+        with TestClient(app) as client:
+            response = client.post(
+                "/twilio/voice/incoming",
+                data={"CallSid": "CA-unsigned"},
+            )
+
+    assert response.status_code == 403

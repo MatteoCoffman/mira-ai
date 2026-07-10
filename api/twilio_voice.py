@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 from contextvars import ContextVar
-from typing import Callable
+from typing import Annotated, Callable
 from urllib.parse import urljoin
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from twilio.twiml.voice_response import Gather, VoiceResponse
 
@@ -17,6 +17,7 @@ from agents.receptionist import (
     messages_from_serializable,
     messages_to_serializable,
 )
+from api.twilio_auth import parse_twilio_webhook
 from db import (
     get_session_created_at,
     get_session_tenant_id,
@@ -120,9 +121,13 @@ def _gather_speech(response: VoiceResponse, action_path: str, prompt: str | None
 
 
 @router.post("/incoming")
-async def incoming_call(request: Request, CallSid: str = Form(...)) -> Response:
+async def incoming_call(
+    request: Request,
+    form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
+) -> Response:
     """New call — play IVR menu to pick demo business."""
     bind_public_base_url(request)
+    _ = form["CallSid"]
     response = _voice_response()
     gather = Gather(
         num_digits=1,
@@ -141,13 +146,14 @@ async def incoming_call(request: Request, CallSid: str = Form(...)) -> Response:
 @router.post("/menu")
 async def ivr_menu(
     request: Request,
-    CallSid: str = Form(...),
-    Digits: str = Form(default=""),
+    form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
 ) -> Response:
     """Map keypad digit to tenant and start the conversation."""
     bind_public_base_url(request)
+    call_sid = form["CallSid"]
+    digits = form.get("Digits", "")
     response = _voice_response()
-    tenant_id = IVR_TENANT_MAP.get(Digits.strip())
+    tenant_id = IVR_TENANT_MAP.get(digits.strip())
     if not tenant_id:
         response.say("Invalid selection.", voice="Polly.Joanna")
         response.redirect(public_url("/twilio/voice/incoming"), method="POST")
@@ -160,7 +166,7 @@ async def ivr_menu(
         return twiml(response)
 
     save_session_state(
-        CallSid,
+        call_sid,
         tenant_id,
         {"ivr_complete": True, "voice_call": True},
         [],
@@ -174,38 +180,39 @@ async def ivr_menu(
 @router.post("/turn")
 async def speech_turn(
     request: Request,
-    CallSid: str = Form(...),
-    SpeechResult: str = Form(default=""),
+    form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
 ) -> Response:
     """Process caller speech through the receptionist agent."""
     bind_public_base_url(request)
+    call_sid = form["CallSid"]
+    speech_result = form.get("SpeechResult", "")
     response = _voice_response()
-    tenant_id = get_session_tenant_id(CallSid)
+    tenant_id = get_session_tenant_id(call_sid)
     if not tenant_id:
         response.redirect(public_url("/twilio/voice/incoming"), method="POST")
         return twiml(response)
 
-    user_text = SpeechResult.strip()
+    user_text = speech_result.strip()
     if not user_text:
         response.say("Sorry, I didn't hear anything.", voice="Polly.Joanna")
         _gather_speech(response, "/twilio/voice/turn", "Please tell me how I can help.")
         return twiml(response)
 
-    prior = load_session_state(CallSid)
+    prior = load_session_state(call_sid)
     state = prior[0] if prior else {"ivr_complete": True, "voice_call": True}
     messages = messages_from_serializable(prior[1]) if prior else []
 
     state, messages, reply = invoke_turn(
         _graph(),
         tenant_id=tenant_id,
-        session_id=CallSid,
+        session_id=call_sid,
         user_text=user_text,
         prior_state=state,
         prior_messages=messages,
     )
 
     save_session_state(
-        CallSid,
+        call_sid,
         tenant_id,
         state,
         messages_to_serializable(messages),
@@ -213,7 +220,7 @@ async def speech_turn(
 
     if state.get("should_end_call"):
         response.say(reply or "Thank you for calling. Goodbye.", voice="Polly.Joanna")
-        _run_post_call_if_needed(CallSid)
+        _run_post_call_if_needed(call_sid)
         response.hangup()
         return twiml(response)
 
@@ -224,10 +231,11 @@ async def speech_turn(
 
 @router.post("/status")
 async def call_status(
-    CallSid: str = Form(...),
-    CallStatus: str = Form(default=""),
+    form: Annotated[dict[str, str], Depends(parse_twilio_webhook)],
 ) -> Response:
     """Run post-call pipeline when the phone call ends (configure on Twilio number)."""
-    if CallStatus in {"completed", "busy", "failed", "no-answer", "canceled"}:
-        _run_post_call_if_needed(CallSid)
+    call_sid = form["CallSid"]
+    call_status_value = form.get("CallStatus", "")
+    if call_status_value in {"completed", "busy", "failed", "no-answer", "canceled"}:
+        _run_post_call_if_needed(call_sid)
     return Response(content="", media_type="text/plain")
