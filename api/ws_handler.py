@@ -10,7 +10,11 @@ from typing import Any
 import boto3
 
 from agents.receptionist import build_receptionist_graph
-from api.conversation_relay import bind_connection_from_setup, handle_prompt
+from api.conversation_relay import (
+    bind_connection_from_setup,
+    handle_dtmf,
+    handle_prompt,
+)
 from db import delete_ws_connection, get_ws_connection, init_db
 from scripts.seed import main as seed_main
 from services.secrets import load_secrets
@@ -109,14 +113,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             outbound, _state = handle_prompt(
                 _get_graph(),
                 session_id=conn["session_id"],
-                tenant_id=conn["tenant_id"],
+                tenant_id=conn.get("tenant_id") or "",
                 voice_prompt=message.get("voicePrompt", ""),
             )
             for payload in outbound:
                 _post_json(client, connection_id, payload)
             return _ok({"prompted": True, "messages": len(outbound)})
 
-        if msg_type in {"interrupt", "dtmf", "error"}:
+        if msg_type == "dtmf":
+            digit = str(message.get("digit") or "").strip()
+            outbound = handle_dtmf(connection_id=connection_id, digit=digit)
+            for payload in outbound:
+                _post_json(client, connection_id, payload)
+            return _ok({"dtmf": digit, "messages": len(outbound)})
+
+        if msg_type in {"interrupt", "error"}:
             logger.info("ConversationRelay event %s: %s", msg_type, message)
             return _ok({"ignored": msg_type})
 

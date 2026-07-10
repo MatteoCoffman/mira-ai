@@ -12,10 +12,15 @@ from agents.receptionist import (
 )
 from db import (
     get_session_tenant_id,
+    get_tenant,
+    get_ws_connection,
     load_session_state,
     put_ws_connection,
     save_session_state,
 )
+from scripts.seed import IVR_TENANT_MAP
+
+PENDING_TENANT = ""
 
 
 def chunk_reply_for_tts(reply: str) -> list[str]:
@@ -61,9 +66,7 @@ def bind_connection_from_setup(
     if not session_id:
         raise ValueError("setup message missing callSid/session_id")
     if not tenant_id:
-        tenant_id = get_session_tenant_id(session_id) or ""
-    if not tenant_id:
-        raise ValueError("setup message missing tenant_id")
+        tenant_id = get_session_tenant_id(session_id) or PENDING_TENANT
 
     put_ws_connection(
         connection_id,
@@ -71,6 +74,53 @@ def bind_connection_from_setup(
         tenant_id=tenant_id,
     )
     return {"session_id": session_id, "tenant_id": tenant_id}
+
+
+def handle_dtmf(
+    *,
+    connection_id: str,
+    digit: str,
+) -> list[dict[str, Any]]:
+    """Bind tenant from IVR digit and return greeting TTS tokens."""
+    conn = get_ws_connection(connection_id)
+    if not conn:
+        return text_token_messages(
+            "Sorry, I lost the call connection. Please hang up and try again."
+        )
+
+    session_id = conn["session_id"]
+    if conn.get("tenant_id"):
+        return text_token_messages(
+            "You're already connected. How can I help you today?"
+        )
+
+    tenant_id = IVR_TENANT_MAP.get((digit or "").strip())
+    if not tenant_id:
+        return text_token_messages(
+            "Invalid selection. Press 1 for Dave's HVAC, 2 for Pest Pros, or 3 for Mike's Plumbing."
+        )
+
+    tenant = get_tenant(tenant_id)
+    if not tenant:
+        return text_token_messages(
+            "That demo is unavailable. Please try another selection."
+        )
+
+    prior = load_session_state(session_id)
+    state = prior[0] if prior else {}
+    messages = prior[1] if prior else []
+    state = {
+        **state,
+        "ivr_complete": True,
+        "voice_call": True,
+    }
+    save_session_state(session_id, tenant_id, state, messages)
+    put_ws_connection(
+        connection_id,
+        session_id=session_id,
+        tenant_id=tenant_id,
+    )
+    return text_token_messages(tenant["greeting"])
 
 
 def handle_prompt(
@@ -81,6 +131,12 @@ def handle_prompt(
     voice_prompt: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Run one receptionist turn and return outbound ConversationRelay messages + state."""
+    if not tenant_id:
+        outbound = text_token_messages(
+            "Please press 1 for Dave's HVAC, 2 for Pest Pros, or 3 for Mike's Plumbing."
+        )
+        return outbound, {"ivr_complete": False, "voice_call": True}
+
     user_text = (voice_prompt or "").strip()
     prior = load_session_state(session_id)
     state = prior[0] if prior else {"ivr_complete": True, "voice_call": True}

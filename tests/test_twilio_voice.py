@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,7 +33,7 @@ def voice_client(tmp_path, monkeypatch):
             yield client, mock_graph
 
 
-def test_incoming_returns_ivr_twiml(voice_client):
+def test_incoming_plays_ivr_and_gathers_digit(voice_client):
     client, _ = voice_client
     response = client.post(
         "/twilio/voice/incoming",
@@ -41,13 +42,15 @@ def test_incoming_returns_ivr_twiml(voice_client):
     assert response.status_code == 200
     assert "application/xml" in response.headers.get("content-type", "")
     body = response.text
-    assert "Welcome to the Mira AI receptionist demo" in body
     assert "Gather" in body
+    assert "Play" in body
+    assert "assets/ivr-menu.mp3" in body
     assert "/twilio/voice/menu" in body
-    assert "statusCallback" not in body
+    assert "ConversationRelay" not in body
+    assert "Connect" not in body
 
 
-def test_menu_selects_hvac_and_connects_conversation_relay(voice_client):
+def test_menu_connects_conversation_relay_for_valid_digit(voice_client):
     client, _ = voice_client
     response = client.post(
         "/twilio/voice/menu",
@@ -55,16 +58,40 @@ def test_menu_selects_hvac_and_connects_conversation_relay(voice_client):
     )
     assert response.status_code == 200
     body = response.text
-    assert "Dave's HVAC" in body or "ConversationRelay" in body
-    assert get_session_tenant_id("CA-test-menu") == "daves-hvac"
     assert "ConversationRelay" in body
     assert "Connect" in body
     assert "wss://test.example.com/prod" in body
     assert "ElevenLabs" in body
+    assert "tnSpp4vdxKPjI9w0GnoV" in body
     assert "Deepgram" in body
+    assert "session_id" in body
     assert "tenant_id" in body
     assert "relay-action" in body
-    assert "/twilio/voice/turn" not in body
+    assert "Dave" in body or "HVAC" in body
+    assert get_session_tenant_id("CA-test-menu") == DAVE_HVAC["tenant_id"]
+
+
+def test_menu_rejects_invalid_digit(voice_client):
+    client, _ = voice_client
+    response = client.post(
+        "/twilio/voice/menu",
+        data={"CallSid": "CA-test-bad", "Digits": "9"},
+    )
+    assert response.status_code == 200
+    assert "Invalid selection" in response.text
+    assert "/twilio/voice/incoming" in response.text
+    assert get_session_tenant_id("CA-test-bad") is None
+
+
+def test_ivr_audio_asset_served_when_present(voice_client, tmp_path, monkeypatch):
+    client, _ = voice_client
+    audio_path = Path(__file__).resolve().parents[1] / "static" / "ivr-menu.mp3"
+    if not audio_path.is_file():
+        pytest.skip("static/ivr-menu.mp3 not generated yet")
+    response = client.get("/assets/ivr-menu.mp3")
+    assert response.status_code == 200
+    assert "audio/mpeg" in response.headers.get("content-type", "")
+    assert response.content[:3] == b"ID3" or response.content[:2] == b"\xff\xfb" or len(response.content) > 100
 
 
 def test_turn_invokes_agent_and_responds(voice_client):

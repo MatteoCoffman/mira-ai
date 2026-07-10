@@ -46,7 +46,8 @@ def init_db() -> None:
                 faq_json TEXT NOT NULL DEFAULT '[]',
                 owner_sms_phone TEXT,
                 owner_email TEXT,
-                emergency_keywords TEXT NOT NULL DEFAULT '[]'
+                emergency_keywords TEXT NOT NULL DEFAULT '[]',
+                scheduling_json TEXT NOT NULL DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS call_sessions (
@@ -106,18 +107,8 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS availability (
-                tenant_id TEXT NOT NULL,
-                slot_id TEXT NOT NULL,
-                starts_at TEXT NOT NULL,
-                ends_at TEXT NOT NULL,
-                label TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                PRIMARY KEY (tenant_id, slot_id)
-            );
-
             CREATE TABLE IF NOT EXISTS appointments (
-                appointment_id TEXT PRIMARY KEY,
+                appointment_id TEXT NOT NULL UNIQUE,
                 tenant_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
                 slot_id TEXT NOT NULL,
@@ -129,7 +120,8 @@ def init_db() -> None:
                 ends_at TEXT NOT NULL,
                 label TEXT,
                 status TEXT NOT NULL DEFAULT 'booked',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (tenant_id, slot_id)
             );
             """
         )
@@ -150,6 +142,7 @@ def get_tenant(tenant_id: str) -> dict[str, Any] | None:
     if tenant:
         tenant["faq"] = json.loads(tenant.pop("faq_json"))
         tenant["emergency_keywords"] = json.loads(tenant.pop("emergency_keywords"))
+        tenant["scheduling"] = json.loads(tenant.pop("scheduling_json", "{}") or "{}")
     return tenant
 
 
@@ -306,8 +299,8 @@ def seed_tenant(tenant: dict[str, Any]) -> None:
             INSERT INTO tenants (
                 tenant_id, business_name, greeting, hours, services,
                 service_area, faq_json, owner_sms_phone, owner_email,
-                emergency_keywords
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                emergency_keywords, scheduling_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tenant_id) DO UPDATE SET
                 business_name = excluded.business_name,
                 greeting = excluded.greeting,
@@ -317,7 +310,8 @@ def seed_tenant(tenant: dict[str, Any]) -> None:
                 faq_json = excluded.faq_json,
                 owner_sms_phone = excluded.owner_sms_phone,
                 owner_email = excluded.owner_email,
-                emergency_keywords = excluded.emergency_keywords
+                emergency_keywords = excluded.emergency_keywords,
+                scheduling_json = excluded.scheduling_json
             """,
             (
                 tenant["tenant_id"],
@@ -330,6 +324,7 @@ def seed_tenant(tenant: dict[str, Any]) -> None:
                 tenant.get("owner_sms_phone"),
                 tenant.get("owner_email"),
                 json.dumps(tenant.get("emergency_keywords", [])),
+                json.dumps(tenant.get("scheduling") or {}),
             ),
         )
 
@@ -449,59 +444,29 @@ def delete_ws_connection(connection_id: str) -> None:
         )
 
 
-def seed_availability_slots(tenant_id: str, slots: list[dict[str, Any]]) -> None:
-    """Replace open slots for a tenant; never overwrite booked rows."""
-    with get_connection() as conn:
-        booked_rows = conn.execute(
-            "SELECT slot_id FROM availability WHERE tenant_id = ? AND status = 'booked'",
-            (tenant_id,),
-        ).fetchall()
-        booked_ids = {row["slot_id"] for row in booked_rows}
-        conn.execute(
-            "DELETE FROM availability WHERE tenant_id = ? AND status = 'open'",
-            (tenant_id,),
-        )
-        for slot in slots:
-            if slot["slot_id"] in booked_ids:
-                continue
-            conn.execute(
-                """
-                INSERT INTO availability (
-                    tenant_id, slot_id, starts_at, ends_at, label, status
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    tenant_id,
-                    slot["slot_id"],
-                    slot["starts_at"],
-                    slot["ends_at"],
-                    slot["label"],
-                    slot.get("status", "open"),
-                ),
-            )
-
-
-def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
+def list_booked_slot_ids(tenant_id: str) -> set[str]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM availability
-            WHERE tenant_id = ? AND status = 'open'
-            ORDER BY starts_at ASC
-            LIMIT ?
+            SELECT slot_id FROM appointments
+            WHERE tenant_id = ? AND status = 'booked'
             """,
-            (tenant_id, limit),
+            (tenant_id,),
         ).fetchall()
-    return [row_to_dict(row) for row in rows if row_to_dict(row)]
+    return {row["slot_id"] for row in rows}
 
 
-def get_slot(tenant_id: str, slot_id: str) -> dict[str, Any] | None:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM availability WHERE tenant_id = ? AND slot_id = ?",
-            (tenant_id, slot_id),
-        ).fetchone()
-    return row_to_dict(row)
+def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
+    from services.scheduling import build_candidate_slots
+
+    tenant = get_tenant(tenant_id) or {}
+    booked = list_booked_slot_ids(tenant_id)
+    open_slots = [
+        slot
+        for slot in build_candidate_slots(scheduling=tenant.get("scheduling"))
+        if slot["slot_id"] not in booked
+    ]
+    return open_slots[:limit]
 
 
 def book_slot(
@@ -514,49 +479,46 @@ def book_slot(
     address: str | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    slot = get_slot(tenant_id, slot_id)
+    from services.scheduling import get_candidate_slot
+
+    tenant = get_tenant(tenant_id) or {}
+    slot = get_candidate_slot(slot_id, scheduling=tenant.get("scheduling"))
     if not slot:
         raise ValueError(f"Slot not found: {slot_id}")
-    if slot.get("status") != "open":
-        raise ValueError(f"Slot is not available: {slot_id}")
 
+    appointment_id = str(uuid.uuid4())
     with get_connection() as conn:
-        updated = conn.execute(
+        try:
+            conn.execute(
+                """
+                INSERT INTO appointments (
+                    appointment_id, tenant_id, session_id, slot_id,
+                    caller_name, phone, address, reason,
+                    starts_at, ends_at, label, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked')
+                """,
+                (
+                    appointment_id,
+                    tenant_id,
+                    session_id,
+                    slot_id,
+                    caller_name or "",
+                    phone or "",
+                    address or "",
+                    reason or "",
+                    slot["starts_at"],
+                    slot["ends_at"],
+                    slot.get("label", ""),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"Slot is not available: {slot_id}") from exc
+        row = conn.execute(
             """
-            UPDATE availability SET status = 'booked'
-            WHERE tenant_id = ? AND slot_id = ? AND status = 'open'
+            SELECT * FROM appointments
+            WHERE tenant_id = ? AND slot_id = ?
             """,
             (tenant_id, slot_id),
-        ).rowcount
-        if updated != 1:
-            raise ValueError(f"Slot is not available: {slot_id}")
-
-        appointment_id = str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO appointments (
-                appointment_id, tenant_id, session_id, slot_id,
-                caller_name, phone, address, reason,
-                starts_at, ends_at, label, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked')
-            """,
-            (
-                appointment_id,
-                tenant_id,
-                session_id,
-                slot_id,
-                caller_name or "",
-                phone or "",
-                address or "",
-                reason or "",
-                slot["starts_at"],
-                slot["ends_at"],
-                slot.get("label", ""),
-            ),
-        )
-        row = conn.execute(
-            "SELECT * FROM appointments WHERE appointment_id = ?",
-            (appointment_id,),
         ).fetchone()
     return row_to_dict(row) or {}
 

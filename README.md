@@ -54,7 +54,7 @@ Call a real phone number and talk to Mira with streaming speech (Deepgram STT + 
 | 2 | Pest Pros |
 | 3 | Mike's Plumbing |
 
-**Call flow:** IVR digit Gather → `<Connect><ConversationRelay>` WebSocket → LangGraph turns as text tokens → hang-up runs post-call.
+**Call flow:** Gather plays pre-recorded IVR menu → DTMF 1/2/3 → ConversationRelay (tenant greeting + LangGraph turns) → hang-up runs post-call.
 
 ### Setup
 
@@ -86,20 +86,30 @@ Local uvicorn + ngrok HTTP alone is **not enough** for ConversationRelay (WebSoc
    - **A call comes in:** Webhook `POST` → `{ApiFunctionUrl}twilio/voice/incoming`
    - **Call status changes:** Webhook `POST` → `{ApiFunctionUrl}twilio/voice/status` (runs post-call on hang-up)
 
-6. Call your Twilio number → press 1/2/3 → speak naturally (you can interrupt Mira mid-sentence).
+6. Call your Twilio number → hear the menu → press 1/2/3 → Mira greets you in ElevenLabs → speak naturally (you can interrupt mid-sentence).
+
+Regenerate the menu MP3 (committed at `static/ivr-menu.mp3`) after changing `IVR_PROMPT` or the voice id:
+
+```bash
+# Exact ConversationRelay voice match:
+# ELEVENLABS_API_KEY=... python scripts/generate_ivr_audio.py
+python scripts/generate_ivr_audio.py   # falls back to OpenAI TTS if no ElevenLabs key
+```
 
 ### Demo script (booking)
 
 1. Press **1** for Dave's HVAC
-2. Say: **"My AC isn't cooling."**
-3. Mira should ask a short clarifying question, then offer **two open times**
+2. Say: **"My AC isn't cooling."** (ordinary cooling issue — should **book**, not emergency-dispatch)
+3. Mira should ask a short clarifying question, then offer **two open times** (from the next ~2 weeks)
 4. Pick a slot and give name, phone, and address
 5. Mira confirms the booking out loud, then you can hang up
 6. Check DynamoDB: `mira-leads`, `mira-appointments`, `mira-call-records`
 
+For a true emergency demo, press **3** (Mike's Plumbing) and say the basement is flooding — expect owner alert, not a forced appointment.
+
 On hang-up, the post-call agent saves the record and sends an owner SMS (includes the booked time when an appointment exists).
 
-**Note:** ConversationRelay + ElevenLabs + Deepgram costs more per minute than Polly — fine for demos; watch usage if the number is public.
+**Note:** ConversationRelay + ElevenLabs + Deepgram costs more per minute than Polly — fine for demos; watch usage if the number is public. The IVR menu is a pre-recorded MP3 (`static/ivr-menu.mp3`, served at `/assets/ivr-menu.mp3`); Mira uses ElevenLabs via ConversationRelay (`MIRA_TTS_VOICE` in `api/twilio_voice.py`). Generate the MP3 with `ELEVENLABS_API_KEY` for an exact voice match.
 
 ## Quick start (CLI)
 
@@ -118,7 +128,9 @@ npm run deploy       # builds lambda_bundle + deploys stack
 cd ..
 ```
 
-This creates DynamoDB tables (tenants, sessions, leads, notifications, tool-calls, call-records, ws-connections, **availability**, **appointments**), an HTTP Lambda Function URL for Twilio webhooks, and an API Gateway WebSocket for ConversationRelay. Stack outputs: `ApiFunctionUrl`, `ConversationRelayWssUrl`, `ApiSecretArn`. Credentials from `.env` are written to Secrets Manager at deploy time.
+This creates DynamoDB tables (tenants, sessions, leads, notifications, tool-calls, call-records, ws-connections, **appointments**), an HTTP Lambda Function URL for Twilio webhooks, and an API Gateway WebSocket for ConversationRelay. Stack outputs: `ApiFunctionUrl`, `ConversationRelayWssUrl`, `ApiSecretArn`. Credentials from `.env` are written to Secrets Manager at deploy time.
+
+Open appointment slots are **computed per tenant** from Mira-configured scheduling rules on the tenant record (timezone, weekdays, slot hours, 14-day horizon) minus rows in `mira-appointments`. Demo companies have different windows (e.g. Dave Mon–Fri 9/1, Pest Pros Mon–Sat 10/2, Mike Mon–Fri 8/11/3). There is no owner dashboard — Mira staff set `scheduling` in seed / tenant config.
 
 ### 2. Run the app
 

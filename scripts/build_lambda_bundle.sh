@@ -17,5 +17,8 @@ pip install \
   "$ROOT[api]"
 
 cp -r "$ROOT/scripts" "$BUNDLE/scripts"
+if [[ -d "$ROOT/static" ]]; then
+  cp -r "$ROOT/static" "$BUNDLE/static"
+fi
 
 echo "Lambda bundle ready at $BUNDLE ($(du -sh "$BUNDLE" | cut -f1))"

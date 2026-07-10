@@ -18,7 +18,11 @@ from agents.receptionist import (
     messages_from_serializable,
     messages_to_serializable,
 )
-from api.twilio_voice import configure_voice_routes, router as twilio_voice_router
+from api.twilio_voice import (
+    configure_voice_routes,
+    ivr_menu_audio_response,
+    router as twilio_voice_router,
+)
 from db import get_tenant, init_db, load_session_state, save_session_state
 from scripts.seed import main as seed_main
 from services.secrets import load_secrets
@@ -67,6 +71,12 @@ async def initialize_on_request(request: Request, call_next):
 
 
 app.include_router(twilio_voice_router)
+
+
+@app.get("/assets/ivr-menu.mp3", include_in_schema=False)
+def ivr_menu_audio():
+    """Public MP3 for Twilio <Play> during the company menu Gather."""
+    return ivr_menu_audio_response()
 
 
 @app.get("/health")

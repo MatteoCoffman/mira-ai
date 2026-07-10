@@ -73,11 +73,19 @@ def build_receptionist_graph():
             f"Owner notified: {owner_notified}."
         )
         if state.get("urgency") == "emergency" and missing:
-            context_note += " Emergency — ask only for the missing contact fields."
-        elif owner_notified:
+            context_note += " Hard emergency — ask only for the missing contact fields."
+        elif state.get("intent") == "callback" and missing:
+            context_note += " Callback path — ask only for the missing contact fields."
+        elif owner_notified and state.get("urgency") == "emergency":
             context_note += (
-                " All required info is collected and the owner has been alerted. "
+                " Hard emergency — owner has been alerted. "
                 "Confirm help is on the way and do not re-ask for name, phone, or address."
+            )
+        elif owner_notified and state.get("intent") == "callback":
+            context_note += (
+                " Owner has been alerted for a callback. "
+                "Confirm someone will call them back soon; do not say help is on the way; "
+                "do not re-ask for name, phone, or address."
             )
         elif "book_appointment" in (state.get("tool_calls_log") or []):
             context_note += " Appointment already booked — confirm the time and end the call."
@@ -133,9 +141,9 @@ def build_receptionist_graph():
             owner_notified = True
 
         pending = (
-            urgency == "emergency"
-            and bool(collected.get("address"))
+            bool(collected.get("address"))
             and not owner_notified
+            and (urgency == "emergency" or intent == "callback")
         )
 
         tool_log = get_tool_calls(state["session_id"])
@@ -160,12 +168,19 @@ def build_receptionist_graph():
             return {}
 
         collected = state.get("collected") or {}
+        intent = state.get("intent") or collected.get("intent") or "unknown"
+        headline = (
+            "EMERGENCY CALL"
+            if state.get("urgency") == "emergency"
+            else "CALLBACK REQUESTED"
+        )
         message = (
-            f"EMERGENCY CALL\n"
+            f"{headline}\n"
             f"Name: {collected.get('caller_name', 'unknown')}\n"
             f"Phone: {collected.get('phone', 'unknown')}\n"
             f"Address: {collected.get('address', 'unknown')}\n"
-            f"Reason: {collected.get('reason', 'unknown')}"
+            f"Reason: {collected.get('reason', 'unknown')}\n"
+            f"Intent: {intent}"
         )
 
         ctx = ToolContext(session_id=state["session_id"], tenant_id=state["tenant_id"])

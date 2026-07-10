@@ -97,28 +97,12 @@ export class MiraStack extends cdk.Stack {
       timeToLiveAttribute: "ttl",
     });
 
-    const availability = new dynamodb.Table(this, "AvailabilityTable", {
-      tableName: `${prefix}-availability`,
+    const appointments = new dynamodb.Table(this, "AppointmentsBySlotTable", {
+      tableName: `${prefix}-appointments`,
       partitionKey: { name: "tenant_id", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "slot_id", type: dynamodb.AttributeType.STRING },
       billingMode: billing,
       removalPolicy,
-    });
-
-    const appointments = new dynamodb.Table(this, "AppointmentsTable", {
-      tableName: `${prefix}-appointments`,
-      partitionKey: {
-        name: "appointment_id",
-        type: dynamodb.AttributeType.STRING,
-      },
-      billingMode: billing,
-      removalPolicy,
-    });
-    appointments.addGlobalSecondaryIndex({
-      indexName: "tenant-index",
-      partitionKey: { name: "tenant_id", type: dynamodb.AttributeType.STRING },
-      sortKey: { name: "starts_at", type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
     });
     appointments.addGlobalSecondaryIndex({
       indexName: "session-index",
@@ -181,7 +165,6 @@ export class MiraStack extends cdk.Stack {
       toolCalls,
       callRecords,
       wsConnections,
-      availability,
       appointments,
     ];
     for (const table of tables) {
@@ -252,9 +235,6 @@ export class MiraStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, "WsConnectionsTableName", {
       value: wsConnections.tableName,
-    });
-    new cdk.CfnOutput(this, "AvailabilityTableName", {
-      value: availability.tableName,
     });
     new cdk.CfnOutput(this, "AppointmentsTableName", {
       value: appointments.tableName,

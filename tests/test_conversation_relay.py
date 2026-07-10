@@ -10,10 +10,11 @@ from api.conversation_relay import (
     bind_connection_from_setup,
     chunk_reply_for_tts,
     end_session_message,
+    handle_dtmf,
     handle_prompt,
     text_token_messages,
 )
-from db import get_ws_connection, init_db, save_session_state
+from db import get_session_tenant_id, get_ws_connection, init_db, save_session_state
 from scripts.seed import DAVE_HVAC, main as seed_main
 
 
@@ -60,6 +61,49 @@ def test_bind_connection_from_setup(db):
     assert conn is not None
     assert conn["session_id"] == "CA-setup"
     assert conn["tenant_id"] == "daves-hvac"
+
+
+def test_bind_connection_allows_pending_tenant(db):
+    bind_connection_from_setup(
+        "conn-pending",
+        {
+            "type": "setup",
+            "callSid": "CA-pending",
+            "customParameters": {"session_id": "CA-pending"},
+        },
+    )
+    conn = get_ws_connection("conn-pending")
+    assert conn is not None
+    assert conn["session_id"] == "CA-pending"
+    assert conn["tenant_id"] == ""
+
+
+def test_handle_dtmf_binds_tenant_and_greets(db):
+    bind_connection_from_setup(
+        "conn-dtmf",
+        {
+            "type": "setup",
+            "callSid": "CA-dtmf",
+            "customParameters": {"session_id": "CA-dtmf"},
+        },
+    )
+    outbound = handle_dtmf(connection_id="conn-dtmf", digit="1")
+    assert any("Dave" in m.get("token", "") for m in outbound)
+    assert get_session_tenant_id("CA-dtmf") == "daves-hvac"
+    conn = get_ws_connection("conn-dtmf")
+    assert conn is not None
+    assert conn["tenant_id"] == "daves-hvac"
+
+
+def test_handle_prompt_without_tenant_asks_for_digit(db):
+    outbound, state = handle_prompt(
+        MagicMock(),
+        session_id="CA-no-tenant",
+        tenant_id="",
+        voice_prompt="Hello",
+    )
+    assert any("press 1" in m.get("token", "").lower() for m in outbound)
+    assert state.get("ivr_complete") is False
 
 
 def test_handle_prompt_returns_text_tokens(db):

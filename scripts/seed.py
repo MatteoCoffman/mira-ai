@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""Seed demo tenants and availability slots for local development and phone demos."""
+"""Seed demo tenants for local development and phone demos."""
 
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db import init_db, seed_availability_slots, seed_tenant
-
-# Demo timezone for spoken labels (US Central — matches portfolio owner)
-DEMO_TZ = ZoneInfo("America/Chicago")
+from db import init_db, seed_tenant
 
 DAVE_HVAC = {
     "tenant_id": "daves-hvac",
@@ -39,6 +34,13 @@ DAVE_HVAC = {
         "water everywhere",
         "burst pipe",
     ],
+    "scheduling": {
+        "timezone": "America/Chicago",
+        "days_ahead": 14,
+        "weekdays": [0, 1, 2, 3, 4],
+        "slot_hours": [9, 13],
+        "slot_duration_hours": 2,
+    },
 }
 
 PEST_PROS = {
@@ -64,6 +66,13 @@ PEST_PROS = {
         "infestation",
         "bed bugs everywhere",
     ],
+    "scheduling": {
+        "timezone": "America/Chicago",
+        "days_ahead": 14,
+        "weekdays": [0, 1, 2, 3, 4, 5],
+        "slot_hours": [10, 14],
+        "slot_duration_hours": 2,
+    },
 }
 
 MIKES_PLUMBING = {
@@ -89,6 +98,13 @@ MIKES_PLUMBING = {
         "active leak",
         "water damage",
     ],
+    "scheduling": {
+        "timezone": "America/Chicago",
+        "days_ahead": 14,
+        "weekdays": [0, 1, 2, 3, 4],
+        "slot_hours": [8, 11, 15],
+        "slot_duration_hours": 2,
+    },
 }
 
 ALL_DEMO_TENANTS = [DAVE_HVAC, PEST_PROS, MIKES_PLUMBING]
@@ -105,73 +121,12 @@ IVR_PROMPT = (
     "Press 1 for Dave's HVAC, 2 for Pest Pros, or 3 for Mike's Plumbing."
 )
 
-# Weekday morning / afternoon windows (local demo TZ)
-_SLOT_HOURS = (9, 13)
-
-
-def _format_clock(local_start: datetime) -> str:
-    hour = local_start.hour % 12 or 12
-    ampm = "A.M." if local_start.hour < 12 else "P.M."
-    return f"{hour} {ampm}"
-
-
-def _spoken_label(local_start: datetime, today: datetime) -> str:
-    period = "morning" if local_start.hour < 12 else "afternoon"
-    clock = _format_clock(local_start)
-    day_delta = (local_start.date() - today.date()).days
-    if day_delta == 0:
-        day_part = "today"
-    elif day_delta == 1:
-        day_part = "tomorrow"
-    else:
-        day_part = local_start.strftime("%A")
-    return f"{day_part} {period} at {clock}"
-
-
-def build_availability_slots(
-    *,
-    days_ahead: int = 7,
-    now: datetime | None = None,
-) -> list[dict[str, str]]:
-    """Generate open weekday slots for the next N days."""
-    local_now = now.astimezone(DEMO_TZ) if now else datetime.now(DEMO_TZ)
-    today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    slots: list[dict[str, str]] = []
-
-    for day_offset in range(0, days_ahead + 1):
-        day = today + timedelta(days=day_offset)
-        if day.weekday() >= 5:  # skip Sat/Sun
-            continue
-        for hour in _SLOT_HOURS:
-            start_local = day.replace(hour=hour, minute=0)
-            if start_local <= local_now:
-                continue
-            end_local = start_local + timedelta(hours=2)
-            start_utc = start_local.astimezone(timezone.utc)
-            end_utc = end_local.astimezone(timezone.utc)
-            slot_id = start_utc.strftime("%Y-%m-%dT%H:%M")
-            slots.append(
-                {
-                    "slot_id": slot_id,
-                    "starts_at": start_utc.replace(microsecond=0).isoformat(),
-                    "ends_at": end_utc.replace(microsecond=0).isoformat(),
-                    "label": _spoken_label(start_local, today),
-                    "status": "open",
-                }
-            )
-    return slots
-
 
 def main() -> None:
     init_db()
-    slots = build_availability_slots()
     for tenant in ALL_DEMO_TENANTS:
         seed_tenant(tenant)
-        seed_availability_slots(tenant["tenant_id"], slots)
-        print(
-            f"Seeded tenant: {tenant['business_name']} ({tenant['tenant_id']}) "
-            f"with {len(slots)} open slots"
-        )
+        print(f"Seeded tenant: {tenant['business_name']} ({tenant['tenant_id']})")
 
 
 if __name__ == "__main__":

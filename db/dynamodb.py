@@ -19,7 +19,6 @@ _TABLE_SUFFIXES = (
     "tool-calls",
     "call-records",
     "ws-connections",
-    "availability",
     "appointments",
 )
 
@@ -79,6 +78,7 @@ def get_tenant(tenant_id: str) -> dict[str, Any] | None:
     tenant["emergency_keywords"] = json.loads(
         tenant.pop("emergency_keywords", "[]")
     )
+    tenant["scheduling"] = json.loads(tenant.pop("scheduling_json", "{}") or "{}")
     return tenant
 
 
@@ -96,6 +96,7 @@ def seed_tenant(tenant: dict[str, Any]) -> None:
             "owner_sms_phone": tenant.get("owner_sms_phone"),
             "owner_email": tenant.get("owner_email"),
             "emergency_keywords": json.dumps(tenant.get("emergency_keywords", [])),
+            "scheduling_json": json.dumps(tenant.get("scheduling") or {}),
         }
     )
 
@@ -315,59 +316,30 @@ def delete_ws_connection(connection_id: str) -> None:
     table.delete_item(Key={"connection_id": connection_id})
 
 
-def seed_availability_slots(tenant_id: str, slots: list[dict[str, Any]]) -> None:
-    """Replace open slots for a tenant with the provided list (keeps booked slots)."""
-    table = _resource().Table(table_name("availability"))
-    existing = table.query(
-        KeyConditionExpression="tenant_id = :tid",
-        ExpressionAttributeValues={":tid": tenant_id},
-    ).get("Items", [])
-    booked_ids = {
-        item["slot_id"]
-        for item in existing
-        if item.get("status") == "booked" and item.get("slot_id")
-    }
-    for item in existing:
-        if item.get("status") == "open":
-            table.delete_item(
-                Key={"tenant_id": tenant_id, "slot_id": item["slot_id"]}
-            )
-    for slot in slots:
-        # Never overwrite a booked slot with a fresh open seed row.
-        if slot["slot_id"] in booked_ids:
-            continue
-        table.put_item(
-            Item={
-                "tenant_id": tenant_id,
-                "slot_id": slot["slot_id"],
-                "starts_at": slot["starts_at"],
-                "ends_at": slot["ends_at"],
-                "label": slot["label"],
-                "status": slot.get("status", "open"),
-            }
-        )
-
-
-def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
-    table = _resource().Table(table_name("availability"))
+def list_booked_slot_ids(tenant_id: str) -> set[str]:
+    table = _resource().Table(table_name("appointments"))
     response = table.query(
         KeyConditionExpression="tenant_id = :tid",
         ExpressionAttributeValues={":tid": tenant_id},
-        ScanIndexForward=True,
     )
-    open_slots = [
-        dict(item)
+    return {
+        item["slot_id"]
         for item in response.get("Items", [])
-        if item.get("status") == "open"
+        if item.get("slot_id") and item.get("status", "booked") == "booked"
+    }
+
+
+def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
+    from services.scheduling import build_candidate_slots
+
+    tenant = get_tenant(tenant_id) or {}
+    booked = list_booked_slot_ids(tenant_id)
+    open_slots = [
+        slot
+        for slot in build_candidate_slots(scheduling=tenant.get("scheduling"))
+        if slot["slot_id"] not in booked
     ]
-    open_slots.sort(key=lambda s: s.get("starts_at", ""))
     return open_slots[:limit]
-
-
-def get_slot(tenant_id: str, slot_id: str) -> dict[str, Any] | None:
-    table = _resource().Table(table_name("availability"))
-    item = table.get_item(Key={"tenant_id": tenant_id, "slot_id": slot_id}).get("Item")
-    return dict(item) if item else None
 
 
 def book_slot(
@@ -380,20 +352,12 @@ def book_slot(
     address: str | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    table = _resource().Table(table_name("availability"))
-    slot = get_slot(tenant_id, slot_id)
+    from services.scheduling import get_candidate_slot
+
+    tenant = get_tenant(tenant_id) or {}
+    slot = get_candidate_slot(slot_id, scheduling=tenant.get("scheduling"))
     if not slot:
         raise ValueError(f"Slot not found: {slot_id}")
-    if slot.get("status") != "open":
-        raise ValueError(f"Slot is not available: {slot_id}")
-
-    table.update_item(
-        Key={"tenant_id": tenant_id, "slot_id": slot_id},
-        UpdateExpression="SET #status = :booked",
-        ConditionExpression="#status = :open",
-        ExpressionAttributeNames={"#status": "status"},
-        ExpressionAttributeValues={":booked": "booked", ":open": "open"},
-    )
 
     appointment_id = str(uuid.uuid4())
     appointment = {
@@ -411,7 +375,16 @@ def book_slot(
         "status": "booked",
         "created_at": _utc_now(),
     }
-    _resource().Table(table_name("appointments")).put_item(Item=appointment)
+    table = _resource().Table(table_name("appointments"))
+    try:
+        table.put_item(
+            Item=appointment,
+            ConditionExpression="attribute_not_exists(slot_id)",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise ValueError(f"Slot is not available: {slot_id}") from exc
+        raise
     return appointment
 
 
