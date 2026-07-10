@@ -7,7 +7,7 @@ import json
 from langchain_core.tools import tool
 
 from agents.tools.context import get_tool_context
-from db.sqlite import log_tool_call
+from db import log_tool_call
 
 
 @tool

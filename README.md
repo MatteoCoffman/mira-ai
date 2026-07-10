@@ -2,25 +2,36 @@
 
 **Mira answers when you can't.**
 
-Mira is an agentic AI phone receptionist for small trades businesses (HVAC, plumbing, etc.). Week 1 delivers a Python CLI demo with LangGraph orchestration, OpenAI tool calling, SQLite persistence, and eval scenarios.
+Mira is an agentic AI phone receptionist for small trades businesses (HVAC, plumbing, etc.). The foundation delivers a Python CLI demo with LangGraph orchestration, OpenAI tool calling, DynamoDB persistence (via AWS CDK), and eval scenarios. **Iteration 2** adds a multi-agent post-call pipeline.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    caller[CallerInput_CLI] --> graph[Mira_LangGraph]
-    graph --> llm[OpenAI_gpt4o_mini]
+    caller[CallerInput_CLI] --> receptionist[Receptionist_graph]
+    receptionist -->|call ends| orchestrator[CallOrchestrator]
+    orchestrator --> postCall[PostCall_graph]
+    postCall --> llm[OpenAI_gpt4o_mini]
     llm -->|tool_calls| tools[ToolNode]
-    tools --> lookup[lookup_business]
-    tools --> save[save_lead]
-    tools --> notify[notify_owner]
-    lookup --> db[(SQLite)]
-    save --> db
-    notify --> mockSms[MockSMS_log]
-    tools --> graph
-    llm -->|final_reply| caller
-    graph --> langsmith[LangSmith_traces]
+    tools --> saveRecord[save_call_record]
+    tools --> sendSummary[send_call_summary]
+    saveRecord --> db[(DynamoDB)]
+    sendSummary --> notify[MockSMS]
+    receptionist --> db
+    cdk[CDK_deploy] --> db
 ```
+
+### Agent 1 — Receptionist (live call)
+
+- LangGraph loop: `agent → tools → sync → notify → agent`
+- Tools: `lookup_business`, `save_lead`, `end_call`
+- Supervisor routes emergency + address to owner alert
+
+### Agent 2 — Post-call (after hang-up)
+
+- LangGraph loop: `agent → tools → sync → agent`
+- Tools: `save_call_record`, `send_call_summary`
+- Saves transcript + summary to `call_records`, sends owner follow-up SMS
 
 ## Stack
 
@@ -29,17 +40,73 @@ flowchart TD
 | LLM | OpenAI `gpt-4o-mini` |
 | Orchestration | LangGraph |
 | Observability | LangSmith |
-| Data | SQLite |
-| Interface | CLI (+ optional FastAPI) |
+| Data | DynamoDB (CDK-provisioned) |
+| Infra | AWS CDK (TypeScript) |
+| Interface | CLI + FastAPI + Twilio Voice |
 
-## Quick start
+## Phone demo (Twilio Voice)
 
-### 1. Prerequisites
+Call a real phone number and talk to Mira. One Twilio number serves three demo businesses via IVR:
 
-- Python 3.11+
-- OpenAI API key
+| Keypad | Business |
+|--------|----------|
+| 1 | Dave's HVAC |
+| 2 | Pest Pros |
+| 3 | Mike's Plumbing |
 
-### 2. Setup
+### Setup
+
+1. **Twilio account** — [twilio.com](https://www.twilio.com): buy a voice-capable phone number.
+2. **Env vars** in `.env`:
+
+```bash
+TWILIO_ACCOUNT_SID=...
+TWILIO_AUTH_TOKEN=...
+TWILIO_PHONE_NUMBER=+1...
+MIRA_PUBLIC_URL=https://your-ngrok-url.ngrok-free.app
+```
+
+3. **Expose the API locally** (until CDK deploy):
+
+```bash
+source .venv/bin/activate
+pip install -e ".[dev,api]"
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# another terminal
+ngrok http 8000
+# copy the https URL into MIRA_PUBLIC_URL
+```
+
+4. **Twilio Console** → Phone Numbers → your number → Voice configuration:
+   - **A call comes in:** Webhook `POST` → `{MIRA_PUBLIC_URL}/twilio/voice/incoming`
+   - **Call status changes:** Webhook `POST` → `{MIRA_PUBLIC_URL}/twilio/voice/status` (runs post-call on hang-up)
+
+5. **Seed tenants** (if not already): `python scripts/seed.py`
+
+6. **Restart uvicorn** after changing `MIRA_PUBLIC_URL`, then call your Twilio number → press 1/2/3 → speak to Mira.
+
+On hang-up, the post-call agent saves the record and sends an owner SMS (real Twilio SMS when credentials are set; mock print otherwise).
+
+## Quick start (CLI)
+
+### 1. Deploy DynamoDB tables (one-time)
+
+Requires AWS CLI credentials and Node.js.
+
+```bash
+aws sts get-caller-identity
+
+cd infra
+npm install
+npx cdk bootstrap    # once per account/region
+npx cdk deploy
+cd ..
+```
+
+This creates six tables: `mira-tenants`, `mira-sessions`, `mira-leads`, `mira-notifications`, `mira-tool-calls`, `mira-call-records`.
+
+### 2. Run the app
 
 ```bash
 cd mira-ai
@@ -47,99 +114,90 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,api]"
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY (and optional LangSmith keys)
-```
-
-### 3. Seed database
-
-```bash
+# Set OPENAI_API_KEY and optional LangSmith keys
 python scripts/seed.py
-```
-
-### 4. Run CLI demo
-
-```bash
 python scripts/demo_cli.py
 ```
 
-Example conversation:
+Example emergency call:
 
 ```
 Caller: My basement is flooding!
-Mira:  [marks urgent, asks for details]
-
 Caller: Mike, 555-1234, 42 Oak Street
-Mira:  [saves lead, sends mock SMS to owner]
 ```
 
-### 5. Run tests
+On `quit` or when Mira ends the call, the **post-call agent** runs automatically.
+
+### SQLite (offline / tests only)
+
+Tests use SQLite automatically. For local offline dev without AWS:
 
 ```bash
-pytest
+MIRA_DB_BACKEND=sqlite python scripts/seed.py
+MIRA_DB_BACKEND=sqlite python scripts/demo_cli.py
 ```
 
-### 6. Run evals (requires OPENAI_API_KEY)
+## Tests and evals
 
 ```bash
-python scripts/run_evals.py
-```
-
-### 7. Optional API server
-
-```bash
-uvicorn api.main:app --reload --port 8000
-curl -X POST http://localhost:8000/turn \
-  -H "Content-Type: application/json" \
-  -d '{"utterance": "What are your hours?"}'
+pytest   # uses SQLite — no AWS required
+python scripts/run_evals.py           # receptionist scenarios
+python scripts/run_post_call_evals.py # post-call scenarios
 ```
 
 ## LangSmith
 
-Set in `.env`:
-
-```
+```bash
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY=your_key
 LANGCHAIN_PROJECT=mira-ai
 ```
 
-Traces appear at [smith.langchain.com](https://smith.langchain.com) for each agent run.
+Traces appear for both receptionist and post-call graphs at [smith.langchain.com](https://smith.langchain.com).
 
 ## Project layout
 
 ```
 mira-ai/
 ├── agents/
-│   ├── tools/           # lookup_business, save_lead, notify_owner, end_call
-│   ├── state.py         # LangGraph state
-│   ├── receptionist.py  # Graph definition + invoke helpers
-│   └── prompts.py       # Mira system prompt
-├── db/sqlite.py         # SQLite schema + queries
-├── evals/scenarios.yaml # 10 eval scenarios
+│   ├── receptionist.py   # Live call agent
+│   ├── post_call.py      # Post-call summarizer agent
+│   ├── orchestrator.py   # Wires call end → post-call
+│   └── tools/
+├── db/
+│   ├── __init__.py       # Backend router (dynamodb | sqlite)
+│   ├── dynamodb.py
+│   └── sqlite.py         # Test / offline fallback
+├── infra/                # AWS CDK — DynamoDB tables
+│   ├── bin/app.ts
+│   └── lib/mira-stack.ts
+├── evals/
+│   ├── scenarios.yaml
+│   └── post_call_scenarios.yaml
 ├── scripts/
-│   ├── seed.py          # Seed Dave's HVAC
-│   ├── demo_cli.py      # Interactive demo
-│   └── run_evals.py     # Eval runner
-├── api/main.py          # Optional FastAPI
-└── tests/test_tools.py
+│   ├── demo_cli.py
+│   ├── run_evals.py
+│   └── run_post_call_evals.py
+└── api/main.py
 ```
 
 ## Interview talking points
 
-1. **Why LangGraph vs one-shot LLM?** Multi-step tool loops, conditional routing (emergency → notify mid-call), and explicit state beat a single JSON response per turn.
+1. **Multi-agent pipeline:** Receptionist handles live turns; post-call agent summarizes and persists after hang-up.
+2. **Why LangGraph:** Tool loops, conditional emergency routing, separate graphs per agent role.
+3. **Why tools:** Lead save and owner SMS are real function calls — not hallucinated actions.
+4. **Supervisor pattern:** Mid-call emergency notify is code-enforced, not left to the LLM alone.
+5. **Infrastructure as code:** DynamoDB tables provisioned via CDK — same stack will host Lambda/API later.
+6. **Evals:** Separate YAML suites for live-call behavior and post-call summarization.
 
-2. **Why tools vs hallucinated actions?** Mira must call `save_lead` and `notify_owner` — the model cannot claim it sent an SMS without the tool running.
+## Roadmap (next iterations)
 
-3. **How does emergency routing work?** After each tool batch, `sync` reads lead state, detects emergency keywords, and routes to `notify` when urgency is emergency and address is present.
-
-4. **What do evals catch?** Regressions in urgency classification, false emergency notifications, and missing tool calls — checked against DB state, not exact wording.
-
-5. **Week 2 roadmap:** Post-call summarizer agent, Twilio SMS/voice, Next.js demo page, MCP tools, 30+ eval cases.
-
-## Known gaps
-
-Eval scenarios may not all pass on first run — LLM behavior varies. Document failures in eval output and tighten prompts/tools iteratively. FAQ intent detection depends on the model calling `save_lead` with `intent=faq`.
+| Iteration | Focus |
+|-----------|--------|
+| 3 | CDK deploy — Lambda + API Gateway for public Twilio webhooks |
+| 4 | Expanded evals + LangSmith eval integration |
+| 5 | Owner dashboard (recent calls + notifications) |
 
 ## License
 
-Private — portfolio / interview demo project.
+Portfolio / interview demo project.

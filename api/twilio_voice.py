@@ -1,0 +1,215 @@
+"""Twilio Voice webhooks — live phone call demo."""
+
+from __future__ import annotations
+
+import os
+from typing import Callable
+from urllib.parse import urljoin
+
+from fastapi import APIRouter, Form
+from fastapi.responses import Response
+from twilio.twiml.voice_response import Gather, VoiceResponse
+
+from agents.orchestrator import run_post_call_pipeline
+from agents.receptionist import (
+    invoke_turn,
+    messages_from_serializable,
+    messages_to_serializable,
+)
+from db import (
+    get_session_created_at,
+    get_session_tenant_id,
+    get_tenant,
+    load_session_state,
+    save_session_state,
+)
+from scripts.seed import IVR_PROMPT, IVR_TENANT_MAP
+
+router = APIRouter(prefix="/twilio/voice", tags=["twilio-voice"])
+
+GraphFactory = Callable[[], object]
+_get_graph: GraphFactory | None = None
+
+
+def configure_voice_routes(get_graph: GraphFactory) -> None:
+    global _get_graph
+    _get_graph = get_graph
+
+
+def public_url(path: str) -> str:
+    base = os.environ.get("MIRA_PUBLIC_URL", "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError(
+            "MIRA_PUBLIC_URL is not set. Use ngrok (or your deployed API URL) so Twilio can reach webhooks."
+        )
+    return urljoin(f"{base}/", path.lstrip("/"))
+
+
+def twiml(response: VoiceResponse) -> Response:
+    """Return TwiML with the content type Twilio expects."""
+    return Response(content=str(response), media_type="application/xml")
+
+
+def _voice_response() -> VoiceResponse:
+    return VoiceResponse()
+
+
+def _graph():
+    if _get_graph is None:
+        raise RuntimeError("Voice routes not configured")
+    return _get_graph()
+
+
+def _run_post_call_if_needed(call_sid: str) -> None:
+    tenant_id = get_session_tenant_id(call_sid)
+    if not tenant_id:
+        return
+
+    prior = load_session_state(call_sid)
+    if not prior:
+        return
+
+    state, serialized = prior
+    if state.get("post_call_done"):
+        return
+
+    messages = messages_from_serializable(serialized)
+    if not messages:
+        return
+
+    started_at = get_session_created_at(call_sid)
+    run_post_call_pipeline(
+        tenant_id=tenant_id,
+        session_id=call_sid,
+        messages=messages,
+        dialog_state=state,
+        started_at=started_at,
+    )
+
+    state["post_call_done"] = True
+    save_session_state(call_sid, tenant_id, state, serialized)
+
+
+def _gather_speech(response: VoiceResponse, action_path: str, prompt: str | None = None) -> None:
+    gather = Gather(
+        input="speech",
+        action=public_url(action_path),
+        method="POST",
+        speech_timeout="auto",
+        language="en-US",
+        action_on_empty_result=True,
+    )
+    if prompt:
+        gather.say(prompt, voice="Polly.Joanna")
+    response.append(gather)
+    response.say("I didn't catch that. Goodbye.", voice="Polly.Joanna")
+    response.hangup()
+
+
+@router.post("/incoming")
+async def incoming_call(CallSid: str = Form(...)) -> Response:
+    """New call — play IVR menu to pick demo business."""
+    response = _voice_response()
+    gather = Gather(
+        num_digits=1,
+        action=public_url("/twilio/voice/menu"),
+        method="POST",
+        timeout=10,
+        action_on_empty_result=True,
+    )
+    gather.say(IVR_PROMPT, voice="Polly.Joanna")
+    response.append(gather)
+    response.say("We didn't receive a selection. Goodbye.", voice="Polly.Joanna")
+    response.hangup()
+    return twiml(response)
+
+
+@router.post("/menu")
+async def ivr_menu(
+    CallSid: str = Form(...),
+    Digits: str = Form(default=""),
+) -> Response:
+    """Map keypad digit to tenant and start the conversation."""
+    response = _voice_response()
+    tenant_id = IVR_TENANT_MAP.get(Digits.strip())
+    if not tenant_id:
+        response.say("Invalid selection.", voice="Polly.Joanna")
+        response.redirect(public_url("/twilio/voice/incoming"), method="POST")
+        return twiml(response)
+
+    tenant = get_tenant(tenant_id)
+    if not tenant:
+        response.say("That demo is unavailable. Goodbye.", voice="Polly.Joanna")
+        response.hangup()
+        return twiml(response)
+
+    save_session_state(
+        CallSid,
+        tenant_id,
+        {"ivr_complete": True, "voice_call": True},
+        [],
+    )
+
+    response.say(tenant["greeting"], voice="Polly.Joanna")
+    _gather_speech(response, "/twilio/voice/turn")
+    return twiml(response)
+
+
+@router.post("/turn")
+async def speech_turn(
+    CallSid: str = Form(...),
+    SpeechResult: str = Form(default=""),
+) -> Response:
+    """Process caller speech through the receptionist agent."""
+    response = _voice_response()
+    tenant_id = get_session_tenant_id(CallSid)
+    if not tenant_id:
+        response.redirect(public_url("/twilio/voice/incoming"), method="POST")
+        return twiml(response)
+
+    user_text = SpeechResult.strip()
+    if not user_text:
+        response.say("Sorry, I didn't hear anything.", voice="Polly.Joanna")
+        _gather_speech(response, "/twilio/voice/turn", "Please tell me how I can help.")
+        return twiml(response)
+
+    prior = load_session_state(CallSid)
+    state = prior[0] if prior else {"ivr_complete": True, "voice_call": True}
+    messages = messages_from_serializable(prior[1]) if prior else []
+
+    state, messages, reply = invoke_turn(
+        _graph(),
+        tenant_id=tenant_id,
+        session_id=CallSid,
+        user_text=user_text,
+        prior_state=state,
+        prior_messages=messages,
+    )
+
+    save_session_state(
+        CallSid,
+        tenant_id,
+        state,
+        messages_to_serializable(messages),
+    )
+
+    if state.get("should_end_call"):
+        response.say(reply or "Thank you for calling. Goodbye.", voice="Polly.Joanna")
+        _run_post_call_if_needed(CallSid)
+        response.hangup()
+        return twiml(response)
+
+    response.say(reply, voice="Polly.Joanna")
+    _gather_speech(response, "/twilio/voice/turn")
+    return twiml(response)
+
+
+@router.post("/status")
+async def call_status(
+    CallSid: str = Form(...),
+    CallStatus: str = Form(default=""),
+) -> Response:
+    """Run post-call pipeline when the phone call ends (configure on Twilio number)."""
+    if CallStatus in {"completed", "busy", "failed", "no-answer", "canceled"}:
+        _run_post_call_if_needed(CallSid)
+    return Response(content="", media_type="text/plain")

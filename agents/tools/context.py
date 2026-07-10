@@ -12,6 +12,8 @@ _context: ContextVar["ToolContext | None"] = ContextVar("tool_context", default=
 class ToolContext:
     session_id: str
     tenant_id: str
+    transcript: str | None = None
+    started_at: str | None = None
 
 
 def set_tool_context(ctx: ToolContext) -> None:

@@ -15,17 +15,34 @@ sys.path.insert(0, str(ROOT))
 
 load_dotenv(ROOT / ".env")
 
+from agents.orchestrator import build_transcript, run_post_call_pipeline
 from agents.receptionist import (
     build_receptionist_graph,
     invoke_turn,
     messages_from_serializable,
     messages_to_serializable,
 )
-from db.sqlite import get_tenant, init_db, load_session_state, save_session_state
+from db import get_tenant, init_db, load_session_state, save_session_state
 from scripts.seed import DAVE_HVAC, main as seed_main
 
 
 DEFAULT_TENANT = "daves-hvac"
+
+
+def _run_post_call(session_id: str, state: dict, messages: list) -> None:
+    print("\n--- Post-call agent ---")
+    result = run_post_call_pipeline(
+        tenant_id=DEFAULT_TENANT,
+        session_id=session_id,
+        messages=messages,
+        dialog_state=state,
+    )
+    if result.get("skipped"):
+        print(f"Post-call skipped: {result.get('reason')}")
+        return
+    print(f"Post-call: record_saved={result.get('record_saved')} summary_sent={result.get('summary_sent')}")
+    if result.get("summary"):
+        print(f"Summary: {result['summary']}\n")
 
 
 def print_banner() -> None:
@@ -62,12 +79,14 @@ def main() -> None:
             user_text = input("Caller: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye.")
+            _run_post_call(session_id, state, messages)
             break
 
         if not user_text:
             continue
         if user_text.lower() in {"quit", "exit", "q"}:
             print("Call ended.")
+            _run_post_call(session_id, state, messages)
             break
 
         state, messages, reply = invoke_turn(
@@ -95,6 +114,7 @@ def main() -> None:
 
         if state.get("should_end_call"):
             print("Mira ended the call.")
+            _run_post_call(session_id, state, messages)
             break
 
 

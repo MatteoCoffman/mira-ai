@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed Dave's HVAC tenant for local development."""
+"""Seed demo tenants for local development and phone demos."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db.sqlite import init_db, seed_tenant
+from db import init_db, seed_tenant
 
 DAVE_HVAC = {
     "tenant_id": "daves-hvac",
@@ -36,11 +36,76 @@ DAVE_HVAC = {
     ],
 }
 
+PEST_PROS = {
+    "tenant_id": "pest-pros",
+    "business_name": "Pest Pros Exterminating",
+    "greeting": "Thanks for calling Pest Pros. This is Mira. How can I help you today?",
+    "hours": "Monday–Saturday 8am–6pm. Emergency pest response available after hours.",
+    "services": "Ant, rodent, and termite treatment, bed bug removal, wildlife exclusion",
+    "service_area": "Metro area and suburbs within 30 miles",
+    "owner_sms_phone": "+15559876543",
+    "owner_email": "dispatch@pestpros.example",
+    "faq": [
+        {"q": "Do you handle bed bugs?", "a": "Yes, we offer full bed bug inspection and treatment."},
+        {"q": "Are your treatments pet safe?", "a": "We use pet-safe options whenever possible."},
+        {"q": "How soon can someone come out?", "a": "Same-day for urgent issues when slots are open."},
+    ],
+    "emergency_keywords": [
+        "wasps",
+        "hornet",
+        "swarm",
+        "snake",
+        "raccoon",
+        "infestation",
+        "bed bugs everywhere",
+    ],
+}
+
+MIKES_PLUMBING = {
+    "tenant_id": "mikes-plumbing",
+    "business_name": "Mike's Plumbing",
+    "greeting": "Mike's Plumbing, this is Mira speaking. What can I help you with?",
+    "hours": "Monday–Friday 7am–7pm, 24/7 emergency line for active leaks.",
+    "services": "Leak repair, drain cleaning, water heater install, sewer line service",
+    "service_area": "City and surrounding county",
+    "owner_sms_phone": "+15552223333",
+    "owner_email": "mike@mikesplumbing.example",
+    "faq": [
+        {"q": "Do you offer emergency service?", "a": "Yes, 24/7 for active leaks and burst pipes."},
+        {"q": "What are your rates?", "a": "We provide upfront estimates before work begins."},
+        {"q": "Do you install water heaters?", "a": "Yes, repair and full replacement."},
+    ],
+    "emergency_keywords": [
+        "burst pipe",
+        "flooding",
+        "water everywhere",
+        "sewage",
+        "no water",
+        "active leak",
+        "water damage",
+    ],
+}
+
+ALL_DEMO_TENANTS = [DAVE_HVAC, PEST_PROS, MIKES_PLUMBING]
+
+# Phone IVR: one Twilio number, caller presses 1/2/3
+IVR_TENANT_MAP: dict[str, str] = {
+    "1": DAVE_HVAC["tenant_id"],
+    "2": PEST_PROS["tenant_id"],
+    "3": MIKES_PLUMBING["tenant_id"],
+}
+
+IVR_PROMPT = (
+    "Welcome to the Mira AI receptionist demo. "
+    "Press 1 for Dave's HVAC, 2 for Pest Pros, or 3 for Mike's Plumbing."
+)
+
 
 def main() -> None:
     init_db()
-    seed_tenant(DAVE_HVAC)
-    print(f"Seeded tenant: {DAVE_HVAC['business_name']} ({DAVE_HVAC['tenant_id']})")
+    for tenant in ALL_DEMO_TENANTS:
+        seed_tenant(tenant)
+        print(f"Seeded tenant: {tenant['business_name']} ({tenant['tenant_id']})")
 
 
 if __name__ == "__main__":

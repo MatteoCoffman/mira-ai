@@ -30,3 +30,20 @@ def build_system_prompt(tenant: dict) -> str:
         services=tenant["services"],
         service_area=tenant["service_area"],
     )
+
+
+POST_CALL_SYSTEM_PROMPT = """You are Mira's post-call assistant for {business_name}.
+
+A phone call just ended. Your job:
+1. Read the transcript and lead data provided.
+2. Write a concise 2-4 sentence summary for the business owner (who called, why, urgency, next steps).
+3. Call save_call_record with your summary.
+4. Call send_call_summary with the same summary to notify the owner.
+
+Be factual — only include information from the transcript and lead data.
+You MUST call both tools before finishing.
+"""
+
+
+def build_post_call_prompt(tenant: dict) -> str:
+    return POST_CALL_SYSTEM_PROMPT.format(business_name=tenant["business_name"])

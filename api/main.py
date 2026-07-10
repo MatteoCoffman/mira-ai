@@ -1,4 +1,4 @@
-"""Optional FastAPI endpoint for Mira turns."""
+"""Optional FastAPI endpoint for Mira — HTTP turns and Twilio Voice."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
@@ -18,10 +18,11 @@ from agents.receptionist import (
     messages_from_serializable,
     messages_to_serializable,
 )
-from db.sqlite import get_tenant, init_db, load_session_state, save_session_state
-from scripts.seed import DAVE_HVAC, main as seed_main
+from api.twilio_voice import configure_voice_routes, router as twilio_voice_router
+from db import get_tenant, init_db, load_session_state, save_session_state
+from scripts.seed import main as seed_main
 
-app = FastAPI(title="Mira API", version="0.1.0")
+app = FastAPI(title="Mira API", version="0.2.0")
 _graph = None
 
 
@@ -38,23 +39,32 @@ class TurnResponse(BaseModel):
     should_end_call: bool = False
 
 
+def get_graph():
+    if _graph is None:
+        raise HTTPException(status_code=503, detail="Graph not initialized")
+    return _graph
+
+
 @app.on_event("startup")
 def startup() -> None:
     global _graph
     init_db()
     seed_main()
     _graph = build_receptionist_graph()
+    configure_voice_routes(lambda: _graph)
+
+
+app.include_router(twilio_voice_router)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "mira-ai"}
+    return {"status": "ok", "service": "mira-ai", "voice": "/twilio/voice/incoming"}
 
 
 @app.post("/turn", response_model=TurnResponse)
 def turn(req: TurnRequest) -> TurnResponse:
-    if _graph is None:
-        raise HTTPException(status_code=503, detail="Graph not initialized")
+    graph = get_graph()
 
     tenant = get_tenant(req.tenant_id)
     if not tenant:
@@ -66,7 +76,7 @@ def turn(req: TurnRequest) -> TurnResponse:
     messages = messages_from_serializable(prior[1]) if prior else []
 
     state, messages, reply = invoke_turn(
-        _graph,
+        graph,
         tenant_id=req.tenant_id,
         session_id=session_id,
         user_text=req.utterance,

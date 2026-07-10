@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from agents.receptionist import build_receptionist_graph, invoke_turn
-from db.sqlite import count_notifications, get_lead, init_db, get_tool_calls
+from db import count_notifications, get_lead, init_db, get_tool_calls
 from scripts.seed import main as seed_main
 
 DEFAULT_TENANT = "daves-hvac"

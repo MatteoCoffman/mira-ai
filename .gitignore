@@ -11,3 +11,6 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+infra/node_modules/
+infra/dist/
+cdk.out/

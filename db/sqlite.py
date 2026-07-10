@@ -85,6 +85,18 @@ def init_db() -> None:
                 args_json TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS call_records (
+                call_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id),
+                transcript TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                lead_json TEXT NOT NULL DEFAULT '{}',
+                urgency TEXT,
+                intent TEXT,
+                started_at TEXT,
+                ended_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             """
         )
 
@@ -136,6 +148,24 @@ def load_session_state(session_id: str) -> tuple[dict[str, Any], list[dict[str, 
     if row is None:
         return None
     return json.loads(row["state_json"]), json.loads(row["messages_json"])
+
+
+def get_session_created_at(session_id: str) -> str | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT created_at FROM call_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return row["created_at"] if row else None
+
+
+def get_session_tenant_id(session_id: str) -> str | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT tenant_id FROM call_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return row["tenant_id"] if row else None
 
 
 def upsert_lead(
@@ -268,3 +298,80 @@ def seed_tenant(tenant: dict[str, Any]) -> None:
                 json.dumps(tenant.get("emergency_keywords", [])),
             ),
         )
+
+
+def save_call_record(
+    call_id: str,
+    tenant_id: str,
+    transcript: str,
+    summary: str,
+    lead: dict[str, Any],
+    *,
+    urgency: str | None = None,
+    intent: str | None = None,
+    started_at: str | None = None,
+) -> dict[str, Any]:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO call_records (
+                call_id, tenant_id, transcript, summary, lead_json,
+                urgency, intent, started_at, ended_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(call_id) DO UPDATE SET
+                transcript = excluded.transcript,
+                summary = excluded.summary,
+                lead_json = excluded.lead_json,
+                urgency = excluded.urgency,
+                intent = excluded.intent,
+                ended_at = datetime('now')
+            """,
+            (
+                call_id,
+                tenant_id,
+                transcript,
+                summary,
+                json.dumps(lead),
+                urgency or lead.get("urgency"),
+                intent or lead.get("intent"),
+                started_at,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM call_records WHERE call_id = ?", (call_id,)
+        ).fetchone()
+    record = row_to_dict(row) or {}
+    if record:
+        record["lead"] = json.loads(record.pop("lead_json", "{}"))
+    return record
+
+
+def get_call_record(call_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM call_records WHERE call_id = ?", (call_id,)
+        ).fetchone()
+    record = row_to_dict(row)
+    if record:
+        record["lead"] = json.loads(record.pop("lead_json"))
+    return record
+
+
+def list_call_records(tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM call_records
+            WHERE tenant_id = ?
+            ORDER BY ended_at DESC
+            LIMIT ?
+            """,
+            (tenant_id, limit),
+        ).fetchall()
+    records = []
+    for row in rows:
+        record = row_to_dict(row)
+        if record:
+            record["lead"] = json.loads(record.pop("lead_json"))
+            records.append(record)
+    return records

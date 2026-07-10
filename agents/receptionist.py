@@ -15,7 +15,7 @@ from agents.state import MiraState
 from agents.tools import AGENT_TOOLS
 from agents.tools.context import ToolContext, set_tool_context, clear_tool_context
 from agents.tools.notify_owner import notify_owner
-from db.sqlite import get_lead, get_tenant, get_tool_calls, upsert_lead
+from db import get_lead, get_tenant, get_tool_calls, upsert_lead
 
 EMERGENCY_KEYWORDS = {
     "flooding",
@@ -242,9 +242,11 @@ def messages_from_serializable(data: list[dict]) -> list:
         if role == "human":
             messages.append(HumanMessage(content=item["content"]))
         elif role == "ai":
-            messages.append(
-                AIMessage(content=item.get("content", ""), tool_calls=item.get("tool_calls"))
-            )
+            kwargs: dict = {"content": item.get("content", "")}
+            tool_calls = item.get("tool_calls")
+            if tool_calls:
+                kwargs["tool_calls"] = tool_calls
+            messages.append(AIMessage(**kwargs))
         elif role == "tool":
             messages.append(
                 ToolMessage(

@@ -1,4 +1,4 @@
-"""LangGraph state for Mira receptionist."""
+"""LangGraph state for Mira agents."""
 
 from __future__ import annotations
 
@@ -28,3 +28,13 @@ class MiraState(TypedDict):
     owner_notified: bool
     pending_owner_notify: bool
     tool_calls_log: list[str]
+
+
+class PostCallState(TypedDict):
+    messages: Annotated[list, add_messages]
+    session_id: str
+    tenant_id: str
+    transcript: str
+    summary: str
+    record_saved: bool
+    summary_sent: bool

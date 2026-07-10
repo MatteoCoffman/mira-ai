@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from db.sqlite import count_notifications, get_tenant, init_db, seed_tenant
+from db import count_notifications, get_tenant, init_db, seed_tenant
 from agents.tools.context import ToolContext, clear_tool_context, set_tool_context
 from agents.tools.lookup_business import lookup_business
 from agents.tools.notify_owner import notify_owner
@@ -18,6 +18,7 @@ from scripts.seed import DAVE_HVAC
 
 @pytest.fixture(autouse=True)
 def setup_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIRA_DB_BACKEND", "sqlite")
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("MIRA_DB_PATH", str(db_path))
     init_db()
@@ -53,7 +54,7 @@ def test_save_lead_persists():
     finally:
         clear_tool_context()
 
-    from db.sqlite import get_lead
+    from db import get_lead
 
     lead = get_lead(session_id)
     assert lead is not None

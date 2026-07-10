@@ -6,7 +6,7 @@ import json
 
 from langchain_core.tools import tool
 
-from db.sqlite import get_tenant, log_tool_call
+from db import get_tenant, log_tool_call
 from agents.tools.context import get_tool_context
 
 

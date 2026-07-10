@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db.sqlite import get_tenant, init_db
+from db import get_tenant, init_db
 from scripts.seed import main
 
 

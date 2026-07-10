@@ -1,0 +1,54 @@
+- id: emergency_call_summary
+  transcript_lines:
+    - "Caller: My basement is flooding!"
+    - "Mira: I can help with that emergency. Can I have your name, phone, and address?"
+    - "Caller: Mike, 555-1234, 42 Oak Street"
+    - "Mira: Help is on the way. The owner has been alerted."
+  lead:
+    caller_name: Mike
+    phone: "555-1234"
+    address: 42 Oak Street
+    urgency: emergency
+    reason: basement flooding
+    intent: emergency
+  expect:
+    record_saved: true
+    summary_sent: true
+
+- id: faq_call_summary
+  transcript_lines:
+    - "Caller: What are your hours?"
+    - "Mira: We are open Monday through Friday 7am to 6pm."
+  lead:
+    intent: faq
+  expect:
+    record_saved: true
+    summary_sent: true
+
+- id: booking_call_summary
+  transcript_lines:
+    - "Caller: I need AC maintenance scheduled"
+    - "Mira: I can help with that. What is your name and phone?"
+    - "Caller: John, 555-4444, 88 Pine Road"
+  lead:
+    caller_name: John
+    phone: "555-4444"
+    address: 88 Pine Road
+    reason: AC maintenance
+    intent: book
+  expect:
+    record_saved: true
+    summary_sent: true
+
+- id: partial_emergency_summary
+  transcript_lines:
+    - "Caller: Water everywhere in the basement!"
+    - "Mira: That sounds urgent. What is your phone number?"
+    - "Caller: 555-1111"
+  lead:
+    phone: "555-1111"
+    urgency: emergency
+    intent: emergency
+  expect:
+    record_saved: true
+    summary_sent: true

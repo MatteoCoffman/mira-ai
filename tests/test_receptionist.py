@@ -12,6 +12,8 @@ from agents.receptionist import (
     _detect_emergency,
     _missing_required_fields,
     get_last_ai_reply,
+    messages_from_serializable,
+    messages_to_serializable,
 )
 
 
@@ -39,6 +41,27 @@ def test_get_last_ai_reply_uses_current_turn_not_stale_message():
     assert get_last_ai_reply(messages) == (
         "Thanks Mike — I've alerted Dave and help is on the way."
     )
+
+
+def test_messages_from_serializable_ai_without_tool_calls():
+    serialized = [
+        {"role": "human", "content": "My basement is flooding!"},
+        {"role": "ai", "content": "Can I have your name, phone, and address?"},
+    ]
+    messages = messages_from_serializable(serialized)
+    assert len(messages) == 2
+    assert isinstance(messages[1], AIMessage)
+    assert messages[1].tool_calls == []
+
+
+def test_messages_round_trip_preserves_tool_calls():
+    original = [
+        HumanMessage(content="help"),
+        AIMessage(content="", tool_calls=[{"name": "save_lead", "args": {}, "id": "1"}]),
+    ]
+    restored = messages_from_serializable(messages_to_serializable(original))
+    assert len(restored) == 2
+    assert restored[1].tool_calls[0]["name"] == "save_lead"
 
 
 def test_scenarios_yaml_loads():
