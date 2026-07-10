@@ -14,7 +14,7 @@ from agents.prompts import build_post_call_prompt
 from agents.state import PostCallState
 from agents.tools import POST_CALL_TOOLS
 from agents.tools.context import ToolContext, clear_tool_context, set_tool_context
-from db import get_call_record, get_tenant, get_tool_calls
+from db import get_appointment_for_session, get_call_record, get_tenant, get_tool_calls
 
 
 def build_post_call_graph():
@@ -105,11 +105,13 @@ def invoke_post_call(
     )
     set_tool_context(ctx)
     try:
+        appointment = get_appointment_for_session(session_id) or {}
         initial = HumanMessage(
             content=(
                 f"Process this completed call.\n\n"
                 f"Transcript:\n{transcript}\n\n"
-                f"Lead data:\n{json.dumps(lead, indent=2)}"
+                f"Lead data:\n{json.dumps(lead, indent=2)}\n\n"
+                f"Appointment data:\n{json.dumps(appointment, indent=2)}"
             )
         )
         result = graph.invoke(
@@ -133,4 +135,5 @@ def invoke_post_call(
         "record_saved": result.get("record_saved", False),
         "summary_sent": result.get("summary_sent", False),
         "record": record,
+        "appointment": get_appointment_for_session(session_id),
     }

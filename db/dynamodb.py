@@ -19,6 +19,8 @@ _TABLE_SUFFIXES = (
     "tool-calls",
     "call-records",
     "ws-connections",
+    "availability",
+    "appointments",
 )
 
 
@@ -311,3 +313,118 @@ def get_ws_connection(connection_id: str) -> dict[str, Any] | None:
 def delete_ws_connection(connection_id: str) -> None:
     table = _resource().Table(table_name("ws-connections"))
     table.delete_item(Key={"connection_id": connection_id})
+
+
+def seed_availability_slots(tenant_id: str, slots: list[dict[str, Any]]) -> None:
+    """Replace open slots for a tenant with the provided list (keeps booked slots)."""
+    table = _resource().Table(table_name("availability"))
+    existing = table.query(
+        KeyConditionExpression="tenant_id = :tid",
+        ExpressionAttributeValues={":tid": tenant_id},
+    ).get("Items", [])
+    booked_ids = {
+        item["slot_id"]
+        for item in existing
+        if item.get("status") == "booked" and item.get("slot_id")
+    }
+    for item in existing:
+        if item.get("status") == "open":
+            table.delete_item(
+                Key={"tenant_id": tenant_id, "slot_id": item["slot_id"]}
+            )
+    for slot in slots:
+        # Never overwrite a booked slot with a fresh open seed row.
+        if slot["slot_id"] in booked_ids:
+            continue
+        table.put_item(
+            Item={
+                "tenant_id": tenant_id,
+                "slot_id": slot["slot_id"],
+                "starts_at": slot["starts_at"],
+                "ends_at": slot["ends_at"],
+                "label": slot["label"],
+                "status": slot.get("status", "open"),
+            }
+        )
+
+
+def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
+    table = _resource().Table(table_name("availability"))
+    response = table.query(
+        KeyConditionExpression="tenant_id = :tid",
+        ExpressionAttributeValues={":tid": tenant_id},
+        ScanIndexForward=True,
+    )
+    open_slots = [
+        dict(item)
+        for item in response.get("Items", [])
+        if item.get("status") == "open"
+    ]
+    open_slots.sort(key=lambda s: s.get("starts_at", ""))
+    return open_slots[:limit]
+
+
+def get_slot(tenant_id: str, slot_id: str) -> dict[str, Any] | None:
+    table = _resource().Table(table_name("availability"))
+    item = table.get_item(Key={"tenant_id": tenant_id, "slot_id": slot_id}).get("Item")
+    return dict(item) if item else None
+
+
+def book_slot(
+    tenant_id: str,
+    slot_id: str,
+    *,
+    session_id: str,
+    caller_name: str | None = None,
+    phone: str | None = None,
+    address: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    table = _resource().Table(table_name("availability"))
+    slot = get_slot(tenant_id, slot_id)
+    if not slot:
+        raise ValueError(f"Slot not found: {slot_id}")
+    if slot.get("status") != "open":
+        raise ValueError(f"Slot is not available: {slot_id}")
+
+    table.update_item(
+        Key={"tenant_id": tenant_id, "slot_id": slot_id},
+        UpdateExpression="SET #status = :booked",
+        ConditionExpression="#status = :open",
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={":booked": "booked", ":open": "open"},
+    )
+
+    appointment_id = str(uuid.uuid4())
+    appointment = {
+        "appointment_id": appointment_id,
+        "tenant_id": tenant_id,
+        "session_id": session_id,
+        "slot_id": slot_id,
+        "caller_name": caller_name or "",
+        "phone": phone or "",
+        "address": address or "",
+        "reason": reason or "",
+        "starts_at": slot["starts_at"],
+        "ends_at": slot["ends_at"],
+        "label": slot.get("label", ""),
+        "status": "booked",
+        "created_at": _utc_now(),
+    }
+    _resource().Table(table_name("appointments")).put_item(Item=appointment)
+    return appointment
+
+
+def get_appointment_for_session(session_id: str) -> dict[str, Any] | None:
+    table = _resource().Table(table_name("appointments"))
+    response = table.query(
+        IndexName="session-index",
+        KeyConditionExpression="session_id = :sid",
+        ExpressionAttributeValues={":sid": session_id},
+        Limit=5,
+    )
+    items = response.get("Items", [])
+    if not items:
+        return None
+    items.sort(key=lambda i: i.get("created_at", ""), reverse=True)
+    return dict(items[0])

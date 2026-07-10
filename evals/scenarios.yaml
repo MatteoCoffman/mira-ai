@@ -27,9 +27,10 @@
 - id: booking_request
   turns:
     - "I'd like to schedule AC maintenance"
-    - "John, 555-4444, 88 Pine Road"
+    - "Tomorrow morning works for me. John, 555-4444, 88 Pine Road"
   expect:
     notify_called: false
+    intent: book
 
 - id: vague_initial
   turns:

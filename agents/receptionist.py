@@ -67,18 +67,20 @@ def build_receptionist_graph():
         owner_notified = state.get("owner_notified", False)
         context_note = (
             f"\nCurrent collected fields: {json.dumps(collected)}. "
-            f"Missing fields: {missing or 'none'}. "
-            f"Urgency: {state.get('urgency', 'unknown')}. "
+            f"Missing contact fields for booking/dispatch: {missing or 'none'}. "
+            f"Inferred urgency: {state.get('urgency', 'unknown')}. "
             f"Escalate: {state.get('escalate', False)}. "
             f"Owner notified: {owner_notified}."
         )
-        if missing:
-            context_note += " Ask only for the missing fields."
+        if state.get("urgency") == "emergency" and missing:
+            context_note += " Emergency — ask only for the missing contact fields."
         elif owner_notified:
             context_note += (
                 " All required info is collected and the owner has been alerted. "
                 "Confirm help is on the way and do not re-ask for name, phone, or address."
             )
+        elif "book_appointment" in (state.get("tool_calls_log") or []):
+            context_note += " Appointment already booked — confirm the time and end the call."
         messages = [SystemMessage(content=system + context_note), *state["messages"]]
         response = model_with_tools.invoke(messages)
         return {"messages": [response]}

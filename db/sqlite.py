@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
@@ -102,6 +103,32 @@ def init_db() -> None:
                 connection_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
                 tenant_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS availability (
+                tenant_id TEXT NOT NULL,
+                slot_id TEXT NOT NULL,
+                starts_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                label TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                PRIMARY KEY (tenant_id, slot_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS appointments (
+                appointment_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                slot_id TEXT NOT NULL,
+                caller_name TEXT,
+                phone TEXT,
+                address TEXT,
+                reason TEXT,
+                starts_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                label TEXT,
+                status TEXT NOT NULL DEFAULT 'booked',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             """
@@ -420,3 +447,129 @@ def delete_ws_connection(connection_id: str) -> None:
             "DELETE FROM ws_connections WHERE connection_id = ?",
             (connection_id,),
         )
+
+
+def seed_availability_slots(tenant_id: str, slots: list[dict[str, Any]]) -> None:
+    """Replace open slots for a tenant; never overwrite booked rows."""
+    with get_connection() as conn:
+        booked_rows = conn.execute(
+            "SELECT slot_id FROM availability WHERE tenant_id = ? AND status = 'booked'",
+            (tenant_id,),
+        ).fetchall()
+        booked_ids = {row["slot_id"] for row in booked_rows}
+        conn.execute(
+            "DELETE FROM availability WHERE tenant_id = ? AND status = 'open'",
+            (tenant_id,),
+        )
+        for slot in slots:
+            if slot["slot_id"] in booked_ids:
+                continue
+            conn.execute(
+                """
+                INSERT INTO availability (
+                    tenant_id, slot_id, starts_at, ends_at, label, status
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id,
+                    slot["slot_id"],
+                    slot["starts_at"],
+                    slot["ends_at"],
+                    slot["label"],
+                    slot.get("status", "open"),
+                ),
+            )
+
+
+def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM availability
+            WHERE tenant_id = ? AND status = 'open'
+            ORDER BY starts_at ASC
+            LIMIT ?
+            """,
+            (tenant_id, limit),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows if row_to_dict(row)]
+
+
+def get_slot(tenant_id: str, slot_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM availability WHERE tenant_id = ? AND slot_id = ?",
+            (tenant_id, slot_id),
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def book_slot(
+    tenant_id: str,
+    slot_id: str,
+    *,
+    session_id: str,
+    caller_name: str | None = None,
+    phone: str | None = None,
+    address: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    slot = get_slot(tenant_id, slot_id)
+    if not slot:
+        raise ValueError(f"Slot not found: {slot_id}")
+    if slot.get("status") != "open":
+        raise ValueError(f"Slot is not available: {slot_id}")
+
+    with get_connection() as conn:
+        updated = conn.execute(
+            """
+            UPDATE availability SET status = 'booked'
+            WHERE tenant_id = ? AND slot_id = ? AND status = 'open'
+            """,
+            (tenant_id, slot_id),
+        ).rowcount
+        if updated != 1:
+            raise ValueError(f"Slot is not available: {slot_id}")
+
+        appointment_id = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO appointments (
+                appointment_id, tenant_id, session_id, slot_id,
+                caller_name, phone, address, reason,
+                starts_at, ends_at, label, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked')
+            """,
+            (
+                appointment_id,
+                tenant_id,
+                session_id,
+                slot_id,
+                caller_name or "",
+                phone or "",
+                address or "",
+                reason or "",
+                slot["starts_at"],
+                slot["ends_at"],
+                slot.get("label", ""),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM appointments WHERE appointment_id = ?",
+            (appointment_id,),
+        ).fetchone()
+    return row_to_dict(row) or {}
+
+
+def get_appointment_for_session(session_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM appointments
+            WHERE session_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+    return row_to_dict(row)

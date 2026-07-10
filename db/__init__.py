@@ -8,23 +8,28 @@ from typing import Any
 _IMPL = None
 
 _PUBLIC_NAMES = (
+    "book_slot",
     "count_notifications",
     "delete_ws_connection",
+    "get_appointment_for_session",
     "get_call_record",
     "get_lead",
     "get_session_created_at",
     "get_session_tenant_id",
+    "get_slot",
     "get_tenant",
     "get_tool_calls",
     "get_ws_connection",
     "init_db",
     "list_call_records",
+    "list_open_slots",
     "load_session_state",
     "log_notification",
     "log_tool_call",
     "put_ws_connection",
     "save_call_record",
     "save_session_state",
+    "seed_availability_slots",
     "seed_tenant",
     "upsert_lead",
 )

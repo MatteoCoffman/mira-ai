@@ -24,7 +24,7 @@ flowchart TD
 ### Agent 1 — Receptionist (live call)
 
 - LangGraph loop: `agent → tools → sync → notify → agent`
-- Tools: `lookup_business`, `save_lead`, `end_call`
+- Tools: `lookup_business`, `save_lead`, `check_availability`, `book_appointment`, `end_call`
 - Supervisor routes emergency + address to owner alert
 
 ### Agent 2 — Post-call (after hang-up)
@@ -88,7 +88,16 @@ Local uvicorn + ngrok HTTP alone is **not enough** for ConversationRelay (WebSoc
 
 6. Call your Twilio number → press 1/2/3 → speak naturally (you can interrupt Mira mid-sentence).
 
-On hang-up, the post-call agent saves the record and sends an owner SMS (real Twilio SMS when credentials are set; mock print otherwise).
+### Demo script (booking)
+
+1. Press **1** for Dave's HVAC
+2. Say: **"My AC isn't cooling."**
+3. Mira should ask a short clarifying question, then offer **two open times**
+4. Pick a slot and give name, phone, and address
+5. Mira confirms the booking out loud, then you can hang up
+6. Check DynamoDB: `mira-leads`, `mira-appointments`, `mira-call-records`
+
+On hang-up, the post-call agent saves the record and sends an owner SMS (includes the booked time when an appointment exists).
 
 **Note:** ConversationRelay + ElevenLabs + Deepgram costs more per minute than Polly — fine for demos; watch usage if the number is public.
 
@@ -109,7 +118,7 @@ npm run deploy       # builds lambda_bundle + deploys stack
 cd ..
 ```
 
-This creates DynamoDB tables (including `mira-ws-connections`), an HTTP Lambda Function URL for Twilio webhooks, and an API Gateway WebSocket for ConversationRelay. Stack outputs: `ApiFunctionUrl`, `ConversationRelayWssUrl`, `ApiSecretArn`. Credentials from `.env` are written to Secrets Manager at deploy time.
+This creates DynamoDB tables (tenants, sessions, leads, notifications, tool-calls, call-records, ws-connections, **availability**, **appointments**), an HTTP Lambda Function URL for Twilio webhooks, and an API Gateway WebSocket for ConversationRelay. Stack outputs: `ApiFunctionUrl`, `ConversationRelayWssUrl`, `ApiSecretArn`. Credentials from `.env` are written to Secrets Manager at deploy time.
 
 ### 2. Run the app
 
@@ -210,9 +219,9 @@ mira-ai/
 
 | Iteration | Focus |
 |-----------|--------|
-| 3 | Expanded evals + LangSmith eval integration |
-| 4 | Owner dashboard (recent calls + notifications) |
-| 5 | Cold start optimization + CI |
+| Next | Portfolio polish (README demo number, LangSmith screenshot, short recording) |
+| Later | Expanded evals + CI |
+| Later | Owner dashboard (recent calls + appointments) |
 
 ## License
 

@@ -28,14 +28,16 @@
 - id: booking_call_summary
   transcript_lines:
     - "Caller: I need AC maintenance scheduled"
-    - "Mira: I can help with that. What is your name and phone?"
-    - "Caller: John, 555-4444, 88 Pine Road"
+    - "Mira: I have tomorrow morning at 9 A.M. or tomorrow afternoon at 1 P.M."
+    - "Caller: Tomorrow morning. John, 555-4444, 88 Pine Road"
+    - "Mira: You're booked tomorrow morning at 9 A.M."
   lead:
     caller_name: John
     phone: "555-4444"
     address: 88 Pine Road
     reason: AC maintenance
     intent: book
+    urgency: soon
   expect:
     record_saved: true
     summary_sent: true
