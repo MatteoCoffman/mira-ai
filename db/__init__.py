@@ -20,6 +20,7 @@ _PUBLIC_NAMES = (
     "get_tool_calls",
     "get_ws_connection",
     "init_db",
+    "list_appointments",
     "list_booked_slot_ids",
     "list_call_records",
     "list_open_slots",

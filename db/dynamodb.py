@@ -329,6 +329,17 @@ def list_booked_slot_ids(tenant_id: str) -> set[str]:
     }
 
 
+def list_appointments(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    table = _resource().Table(table_name("appointments"))
+    response = table.query(
+        KeyConditionExpression="tenant_id = :tid",
+        ExpressionAttributeValues={":tid": tenant_id},
+    )
+    items = [dict(item) for item in response.get("Items", [])]
+    items.sort(key=lambda i: i.get("starts_at") or i.get("created_at") or "", reverse=True)
+    return items[:limit]
+
+
 def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
     from services.scheduling import build_candidate_slots
 

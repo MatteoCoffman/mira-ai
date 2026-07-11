@@ -456,6 +456,20 @@ def list_booked_slot_ids(tenant_id: str) -> set[str]:
     return {row["slot_id"] for row in rows}
 
 
+def list_appointments(tenant_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM appointments
+            WHERE tenant_id = ?
+            ORDER BY starts_at DESC
+            LIMIT ?
+            """,
+            (tenant_id, limit),
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
 def list_open_slots(tenant_id: str, limit: int = 6) -> list[dict[str, Any]]:
     from services.scheduling import build_candidate_slots
 

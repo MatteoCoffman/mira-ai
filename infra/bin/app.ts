@@ -20,6 +20,8 @@ new MiraStack(app, "MiraStack", {
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
   twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER,
   miraOwnerSmsPhone: process.env.MIRA_OWNER_SMS_PHONE,
+  miraOwnerApiKey: process.env.MIRA_OWNER_API_KEY,
+  miraCorsOrigins: process.env.MIRA_CORS_ORIGINS,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION ?? "us-east-1",

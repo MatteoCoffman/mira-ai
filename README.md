@@ -2,7 +2,13 @@
 
 **Mira answers when you can't.**
 
-Mira is an agentic AI phone receptionist for small trades businesses (HVAC, plumbing, etc.). The foundation delivers a Python CLI demo with LangGraph orchestration, OpenAI tool calling, DynamoDB persistence (via AWS CDK), and eval scenarios. **Iteration 2** adds a multi-agent post-call pipeline.
+Live phone demo: **+1 (361) 678-3237** — press 1/2/3 for Dave’s HVAC / Pest Pros / Mike’s Plumbing.
+
+**60-second script:** Call → press **1** → “My AC isn’t cooling” → pick a time → hang up (owner SMS). True emergency: press **3**, say the basement is flooding.
+
+Portfolio site (marketing + tucked-away demo owner console): sibling repo `mira-website` on Vercel. Sample owner view: `/demo/owner` (demo data only).
+
+Mira is an agentic AI phone receptionist for small trades businesses (HVAC, plumbing, etc.). LangGraph orchestration, OpenAI tool calling, DynamoDB (AWS CDK), Twilio ConversationRelay, and eval scenarios.
 
 ## Architecture
 
@@ -231,9 +237,9 @@ mira-ai/
 
 | Iteration | Focus |
 |-----------|--------|
-| Next | Portfolio polish (README demo number, LangSmith screenshot, short recording) |
+| Now | Portfolio site (`mira-website`) + owner read API |
 | Later | Expanded evals + CI |
-| Later | Owner dashboard (recent calls + appointments) |
+| Later | Calendar / FSM integrations (Jobber, ServiceTitan, etc.) |
 
 ## License
 

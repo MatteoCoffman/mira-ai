@@ -19,6 +19,8 @@ export interface MiraStackProps extends cdk.StackProps {
   twilioAuthToken?: string;
   twilioPhoneNumber?: string;
   miraOwnerSmsPhone?: string;
+  miraOwnerApiKey?: string;
+  miraCorsOrigins?: string;
 }
 
 export class MiraStack extends cdk.Stack {
@@ -120,6 +122,7 @@ export class MiraStack extends cdk.Stack {
         TWILIO_AUTH_TOKEN: cdk.SecretValue.unsafePlainText(props.twilioAuthToken ?? ""),
         TWILIO_PHONE_NUMBER: cdk.SecretValue.unsafePlainText(props.twilioPhoneNumber ?? ""),
         MIRA_OWNER_SMS_PHONE: cdk.SecretValue.unsafePlainText(props.miraOwnerSmsPhone ?? ""),
+        MIRA_OWNER_API_KEY: cdk.SecretValue.unsafePlainText(props.miraOwnerApiKey ?? ""),
       },
     });
 
@@ -132,6 +135,7 @@ export class MiraStack extends cdk.Stack {
       MIRA_TABLE_PREFIX: prefix,
       MIRA_SECRETS_ARN: apiSecret.secretArn,
       MIRA_VALIDATE_TWILIO_SIGNATURE: "true",
+      MIRA_CORS_ORIGINS: props.miraCorsOrigins ?? "http://localhost:3000",
       LANGCHAIN_PROJECT: props.langchainProject ?? "mira-ai",
       LANGCHAIN_TRACING_V2: props.langchainTracingV2 ?? "true",
     };

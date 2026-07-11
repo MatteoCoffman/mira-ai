@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +20,7 @@ from agents.receptionist import (
     messages_from_serializable,
     messages_to_serializable,
 )
+from api.owner import router as owner_router
 from api.twilio_voice import (
     configure_voice_routes,
     ivr_menu_audio_response,
@@ -27,9 +30,25 @@ from db import get_tenant, init_db, load_session_state, save_session_state
 from scripts.seed import main as seed_main
 from services.secrets import load_secrets
 
-app = FastAPI(title="Mira API", version="0.3.0")
+app = FastAPI(title="Mira API", version="0.4.0")
 _graph = None
 _initialized = False
+
+
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("MIRA_CORS_ORIGINS", "").strip()
+    if not raw:
+        return ["http://localhost:3000"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 class TurnRequest(BaseModel):
@@ -71,6 +90,7 @@ async def initialize_on_request(request: Request, call_next):
 
 
 app.include_router(twilio_voice_router)
+app.include_router(owner_router)
 
 
 @app.get("/assets/ivr-menu.mp3", include_in_schema=False)
